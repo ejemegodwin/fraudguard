@@ -3,60 +3,110 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FraudGuard Dashboard</title>
+  <title>FraudGuard — Risk Intelligence</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; padding: 24px; background: #f5f5f5; color: #222; }
-    h1 { margin-top: 0; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
-    .card { background: white; padding: 18px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
-    .value { font-size: 28px; font-weight: 700; margin-top: 8px; }
-    table { width: 100%; border-collapse: collapse; background: white; }
-    th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }
-    th { background: #eee; }
-    .HIGH { font-weight: 700; }
+    :root{--bg:#f6f7fb;--panel:#fff;--ink:#172033;--muted:#7b8498;--line:#e8ebf2;--nav:#111827;--nav2:#1b2435;--accent:#635bff;--green:#159570;--greenbg:#e8f8f2;--amber:#c78312;--amberbg:#fff5df;--red:#d64545;--redbg:#ffebeb;--blue:#3578e5;--shadow:0 10px 30px rgba(18,25,45,.06)}
+    *{box-sizing:border-box} body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)} button,input{font:inherit}.app{min-height:100vh;display:flex}.sidebar{width:246px;background:var(--nav);color:#fff;position:fixed;inset:0 auto 0 0;padding:22px 14px;display:flex;flex-direction:column;z-index:10}.brand{display:flex;align-items:center;gap:11px;padding:4px 12px 28px;font-weight:800;font-size:18px;letter-spacing:-.3px}.brand-mark{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#746bff,#4f46e5);display:grid;place-items:center;box-shadow:0 7px 18px rgba(99,91,255,.35)}.brand-mark svg{width:19px}.nav-label{text-transform:uppercase;font-size:10px;letter-spacing:1.2px;color:#697386;padding:0 12px 8px}.nav{display:grid;gap:4px}.nav button{border:0;background:transparent;color:#aeb7c8;text-align:left;padding:11px 12px;border-radius:9px;display:flex;align-items:center;gap:11px;cursor:pointer;font-size:13px}.nav button:hover,.nav button.active{background:var(--nav2);color:#fff}.nav button.active{box-shadow:inset 3px 0 0 #756cff}.nav svg{width:17px;height:17px;opacity:.9}.sidebar-bottom{margin-top:auto;border-top:1px solid #263042;padding:16px 10px 2px}.service{display:flex;align-items:center;gap:9px;color:#aeb7c8;font-size:12px}.dot{width:8px;height:8px;border-radius:50%;background:#27c88a;box-shadow:0 0 0 4px rgba(39,200,138,.12)}.main{margin-left:246px;width:calc(100% - 246px);min-width:0}.topbar{height:74px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 30px;position:sticky;top:0;z-index:5}.crumb{font-size:13px;color:var(--muted)}.crumb strong{color:var(--ink)}.top-actions{display:flex;align-items:center;gap:10px}.icon-btn,.refresh{height:38px;border:1px solid var(--line);background:#fff;border-radius:9px;color:#657086;cursor:pointer}.icon-btn{width:38px;display:grid;place-items:center}.icon-btn svg{width:17px}.refresh{padding:0 13px;display:flex;gap:7px;align-items:center;font-size:12px}.refresh svg{width:15px}.avatar{width:36px;height:36px;border-radius:50%;background:#e9e7ff;color:#5148d8;display:grid;place-items:center;font-size:12px;font-weight:800}.content{padding:28px 30px 42px;max-width:1500px;margin:auto}.hero{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:24px}.hero h1{font-size:27px;letter-spacing:-.8px;margin:0 0 7px}.hero p{margin:0;color:var(--muted);font-size:13px}.live{display:flex;align-items:center;gap:8px;background:var(--greenbg);color:var(--green);padding:8px 11px;border-radius:8px;font-size:11px;font-weight:700}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:18px}.metric{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:19px;box-shadow:var(--shadow)}.metric-head{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:12px}.metric-icon{width:32px;height:32px;border-radius:8px;background:#f0efff;color:var(--accent);display:grid;place-items:center}.metric-icon svg{width:16px}.metric-value{font-size:25px;font-weight:800;letter-spacing:-.6px;margin:13px 0 7px}.metric-foot{font-size:11px;color:var(--muted)}.metric-foot.good{color:var(--green)}.workspace{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,.8fr);gap:18px}.panel{background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}.panel-head{padding:18px 19px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}.panel-title{font-weight:750;font-size:14px}.panel-sub{font-size:11px;color:var(--muted);margin-top:4px}.link-btn{border:0;background:transparent;color:var(--accent);font-size:11px;font-weight:700;cursor:pointer}.risk-chart{height:245px;padding:20px 20px 8px;display:flex;align-items:flex-end;gap:12px}.bar-wrap{flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:7px}.bar-value{text-align:center;font-size:10px;color:var(--muted)}.bar{border-radius:5px 5px 2px 2px;background:linear-gradient(180deg,#746cff,#b2adff);min-height:4px;transition:height .5s}.bar-label{text-align:center;color:var(--muted);font-size:10px}.chart-empty{width:100%;height:100%;display:grid;place-items:center;color:var(--muted);font-size:12px}.distribution{padding:18px 20px 22px}.dist-row{display:grid;grid-template-columns:75px 1fr 40px;align-items:center;gap:10px;margin:13px 0;font-size:11px}.track{height:7px;background:#edf0f5;border-radius:9px;overflow:hidden}.fill{height:100%;border-radius:9px}.fill.low{background:#28b985}.fill.medium{background:#e4a832}.fill.high{background:#e45b5b}.dist-count{text-align:right;color:var(--muted)}.table-panel{margin-top:18px}.table-tools{display:flex;gap:8px;align-items:center}.search{height:34px;border:1px solid var(--line);border-radius:8px;padding:0 10px;font-size:11px;outline:none;width:180px;background:#fafbfc}.search:focus{border-color:#aaa4ff}.table-scroll{overflow:auto}.table{width:100%;border-collapse:collapse;min-width:760px}.table th{padding:11px 19px;text-align:left;background:#fafbfc;color:#9098a9;text-transform:uppercase;letter-spacing:.6px;font-size:9px;font-weight:750}.table td{padding:13px 19px;border-top:1px solid var(--line);font-size:11px;white-space:nowrap}.tx-id{font-weight:700;color:#35405a}.user{display:flex;align-items:center;gap:8px}.user-avatar{width:27px;height:27px;border-radius:8px;background:#eef1ff;color:#5961b8;display:grid;place-items:center;font-size:9px;font-weight:800}.amount{font-weight:700}.badge{display:inline-flex;align-items:center;gap:5px;padding:5px 8px;border-radius:6px;font-size:9px;font-weight:800}.badge.allow{background:var(--greenbg);color:var(--green)}.badge.review{background:var(--amberbg);color:var(--amber)}.badge.reject{background:var(--redbg);color:var(--red)}.score{font-weight:800}.score.low{color:var(--green)}.score.medium{color:var(--amber)}.score.high{color:var(--red)}.side-stack{display:grid;gap:18px}.alert-list{padding:5px 18px 9px}.alert{display:flex;gap:10px;padding:13px 0;border-bottom:1px solid var(--line)}.alert:last-child{border-bottom:0}.alert-icon{width:29px;height:29px;border-radius:8px;display:grid;place-items:center;flex:none}.alert-icon.red{background:var(--redbg);color:var(--red)}.alert-icon.amber{background:var(--amberbg);color:var(--amber)}.alert-icon.green{background:var(--greenbg);color:var(--green)}.alert-icon svg{width:14px}.alert-title{font-size:11px;font-weight:700;margin-bottom:3px}.alert-text{font-size:10px;color:var(--muted);line-height:1.45}.alert-time{margin-left:auto;color:#a0a7b5;font-size:9px}.health{padding:5px 19px 18px}.health-item{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line);font-size:11px}.health-item:last-child{border-bottom:0}.health-name{display:flex;align-items:center;gap:8px}.health-ok{font-size:9px;color:var(--green);font-weight:800}.empty{padding:45px 20px;text-align:center;color:var(--muted);font-size:11px}.error{color:var(--red)!important}.hidden{display:none!important}@media(max-width:1050px){.metrics{grid-template-columns:repeat(2,1fr)}.workspace{grid-template-columns:1fr}.side-stack{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){.sidebar{width:70px;padding:18px 9px}.brand{padding:4px 9px 24px}.brand span,.nav-label,.nav button span,.sidebar-bottom{display:none}.nav button{justify-content:center}.main{margin-left:70px;width:calc(100% - 70px)}.topbar{padding:0 16px}.content{padding:20px 16px}.hero{align-items:flex-start;gap:12px}.metrics{grid-template-columns:1fr 1fr}.side-stack{grid-template-columns:1fr}.search{width:130px}}@media(max-width:480px){.metrics{grid-template-columns:1fr}.hero{display:block}.live{display:inline-flex;margin-top:14px}.top-actions .icon-btn{display:none}}
   </style>
 </head>
 <body>
-  <h1>FraudGuard Dashboard</h1>
-  <div class="grid">
-    <div class="card">Transactions<div class="value" id="total">-</div></div>
-    <div class="card">Allowed<div class="value" id="allowed">-</div></div>
-    <div class="card">Review<div class="value" id="review">-</div></div>
-    <div class="card">Rejected<div class="value" id="rejected">-</div></div>
-    <div class="card">Average Risk<div class="value" id="average">-</div></div>
-  </div>
-
-  <h2>Recent transactions</h2>
-  <table>
-    <thead><tr><th>ID</th><th>User</th><th>Amount</th><th>Score</th><th>Decision</th><th>Reasons</th></tr></thead>
-    <tbody id="transactions"></tbody>
-  </table>
-
-  <script>
-    async function loadDashboard() {
-      const stats = await fetch('/stats').then(r => r.json());
-      document.getElementById('total').textContent = stats.total_transactions;
-      document.getElementById('allowed').textContent = stats.allowed;
-      document.getElementById('review').textContent = stats.review;
-      document.getElementById('rejected').textContent = stats.rejected;
-      document.getElementById('average').textContent = stats.average_risk_score;
-
-      const transactions = await fetch('/transactions?limit=50').then(r => r.json());
-      document.getElementById('transactions').innerHTML = transactions.map(t => `
-        <tr>
-          <td>${t.transaction_id}</td>
-          <td>${t.user_id}</td>
-          <td>₦${Number(t.amount).toLocaleString()}</td>
-          <td>${t.risk_score}</td>
-          <td class="${t.risk_level}">${t.decision}</td>
-          <td>${t.reasons.join(', ') || 'None'}</td>
-        </tr>
-      `).join('');
-    }
-
-    loadDashboard().catch(error => {
-      document.getElementById('transactions').innerHTML = `<tr><td colspan="6">Dashboard error: ${error}</td></tr>`;
-    });
-  </script>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 3l7 3v5c0 4.7-3 8.3-7 10-4-1.7-7-5.3-7-10V6l7-3z"/><path d="M9 12l2 2 4-5"/></svg></div><span>FraudGuard</span></div>
+    <div class="nav-label">Monitor</div>
+    <nav class="nav">
+      <button class="active" data-view="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Overview</span></button>
+      <button data-view="transactions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>Transactions</span></button>
+      <button data-view="risk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l8 4v5c0 4.9-3.3 8.1-8 9-4.7-.9-8-4.1-8-9V7l8-4z"/><path d="M12 8v5M12 16h.01"/></svg><span>Risk Monitor</span></button>
+      <button data-view="analytics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5M4 19h17"/><path d="M8 16v-5M12 16V8M16 16V4M20 16v-7"/></svg><span>Analytics</span></button>
+    </nav>
+    <div class="nav-label" style="margin-top:24px">System</div>
+    <nav class="nav">
+      <button data-view="health"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/><circle cx="12" cy="12" r="3.5"/></svg><span>System Health</span></button>
+      <button data-view="api"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 9l-3 3 3 3M16 9l3 3-3 3M14 5l-4 14"/></svg><span>API Explorer</span></button>
+    </nav>
+    <div class="sidebar-bottom"><div class="service"><i class="dot"></i>FraudGuard API online</div></div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div class="crumb"><strong>FraudGuard</strong> <span>/ Risk Intelligence</span></div><div class="top-actions"><button class="refresh" id="refreshBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 0 0-14.8-4M4 5v5h5M4 13a8 8 0 0 0 14.8 4M20 19v-5h-5"/></svg>Refresh</button><button class="icon-btn" title="Notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg></button><div class="avatar">FG</div></div></header>
+    <section class="content">
+      <div id="overviewView">
+        <div class="hero"><div><h1>Risk Intelligence Overview</h1><p>Real-time visibility into transaction risk, decisions, and fraud signals.</p></div><div class="live"><i class="dot"></i> SYSTEM OPERATIONAL</div></div>
+        <div class="metrics">
+          <div class="metric"><div class="metric-head"><span>Total transactions</span><div class="metric-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h12v18H6z"/><path d="M9 7h6M9 11h6M9 15h3"/></svg></div></div><div class="metric-value" id="total">0</div><div class="metric-foot">All transactions received</div></div>
+          <div class="metric"><div class="metric-head"><span>Approved</span><div class="metric-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 6L9 17l-5-5"/></svg></div></div><div class="metric-value" id="allowed">0</div><div class="metric-foot good" id="approvalRate">Waiting for transaction data</div></div>
+          <div class="metric"><div class="metric-head"><span>Needs review</span><div class="metric-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5M12 16h.01"/></svg></div></div><div class="metric-value" id="review">0</div><div class="metric-foot">Manual investigation queue</div></div>
+          <div class="metric"><div class="metric-head"><span>Blocked</span><div class="metric-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M8 8l8 8M16 8l-8 8"/></svg></div></div><div class="metric-value" id="rejected">0</div><div class="metric-foot">Rejected by risk engine</div></div>
+        </div>
+        <div class="workspace">
+          <div>
+            <section class="panel"><div class="panel-head"><div><div class="panel-title">Risk decisions</div><div class="panel-sub">Distribution of decisions across stored transactions</div></div><button class="link-btn" data-view-link="transactions">View transactions →</button></div><div class="risk-chart" id="riskChart"><div class="chart-empty">No transaction data yet</div></div><div class="distribution"><div class="panel-title" style="font-size:12px">Decision distribution</div><div class="dist-row"><span>Approved</span><div class="track"><div class="fill low" id="allowBar" style="width:0%"></div></div><span class="dist-count" id="allowPct">0%</span></div><div class="dist-row"><span>Review</span><div class="track"><div class="fill medium" id="reviewBar" style="width:0%"></div></div><span class="dist-count" id="reviewPct">0%</span></div><div class="dist-row"><span>Blocked</span><div class="track"><div class="fill high" id="rejectBar" style="width:0%"></div></div><span class="dist-count" id="rejectPct">0%</span></div></div></section>
+            <section class="panel table-panel"><div class="panel-head"><div><div class="panel-title">Recent transactions</div><div class="panel-sub">Latest risk decisions from FraudGuard</div></div><div class="table-tools"><input id="search" class="search" placeholder="Search transaction or user…"><button class="link-btn" data-view-link="transactions">View all</button></div></div><div class="table-scroll"><table class="table"><thead><tr><th>Transaction</th><th>User</th><th>Amount</th><th>Risk score</th><th>Decision</th><th>Time</th></tr></thead><tbody id="transactions"><tr><td colspan="6"><div class="empty">No transactions recorded yet.<br>Send a transaction to the FraudGuard API to see it here.</div></td></tr></tbody></table></div></section>
+          </div>
+          <div class="side-stack">
+            <section class="panel"><div class="panel-head"><div><div class="panel-title">Risk alerts</div><div class="panel-sub">Signals requiring attention</div></div><button class="link-btn" data-view-link="risk">Open</button></div><div class="alert-list" id="alerts"><div class="empty">No active risk alerts.</div></div></section>
+            <section class="panel"><div class="panel-head"><div><div class="panel-title">Service health</div><div class="panel-sub">Live dependency checks</div></div><span class="badge allow">ONLINE</span></div><div class="health"><div class="health-item"><span class="health-name"><i class="dot"></i> FraudGuard API</span><span class="health-ok" id="apiHealth">CHECKING</span></div><div class="health-item"><span class="health-name"><i class="dot"></i> Database</span><span class="health-ok" id="dbHealth">CHECKING</span></div><div class="health-item"><span class="health-name"><i class="dot"></i> Risk engine</span><span class="health-ok">READY</span></div></div></section>
+          </div>
+        </div>
+      </div>
+      <div id="secondaryView" class="hidden"></div>
+    </section>
+  </main>
+</div>
+<script>
+  const $ = id => document.getElementById(id);
+  let allTransactions = [];
+  const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const initials = value => String(value || 'U').slice(0,2).toUpperCase();
+  const fmtMoney = n => `₦${Number(n || 0).toLocaleString('en-NG',{maximumFractionDigits:2})}`;
+  const fmtTime = value => { const d=new Date(value); return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-NG',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); };
+  const riskClass = level => String(level || '').toLowerCase();
+  async function getJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json(); }
+  function renderTable(rows=allTransactions){
+    const body=$('transactions');
+    if(!rows.length){ body.innerHTML='<tr><td colspan="6"><div class="empty">No matching transactions found.</div></td></tr>'; return; }
+    body.innerHTML=rows.slice(0,50).map(t=>{const cls=riskClass(t.risk_level);const badge=cls==='low'?'allow':cls==='medium'?'review':'reject';return `<tr><td class="tx-id">${esc(t.transaction_id)}</td><td><div class="user"><span class="user-avatar">${esc(initials(t.user_id))}</span>${esc(t.user_id)}</div></td><td class="amount">${fmtMoney(t.amount)}</td><td class="score ${cls}">${esc(t.risk_score)}/100</td><td><span class="badge ${badge}">${esc(t.decision)}</span></td><td>${fmtTime(t.timestamp)}</td></tr>`}).join('');
+  }
+  function renderChart(rows){
+    const el=$('riskChart'); if(!rows.length){el.innerHTML='<div class="chart-empty">No transaction data yet</div>';return;}
+    const points=rows.slice(0,12).reverse(); const max=Math.max(...points.map(x=>Number(x.risk_score)||0),1);
+    el.innerHTML=points.map(t=>`<div class="bar-wrap"><div class="bar-value">${esc(t.risk_score)}</div><div class="bar" style="height:${Math.max(5,(Number(t.risk_score)||0)/max*155)}px" title="${esc(t.transaction_id)} — ${esc(t.risk_score)}/100"></div><div class="bar-label">${esc(String(t.transaction_id||'').slice(-5))}</div></div>`).join('');
+  }
+  function renderDistribution(stats){
+    const total=Number(stats.total_transactions)||0; const a=Number(stats.allowed)||0,r=Number(stats.review)||0,x=Number(stats.rejected)||0; const pct=n=>total?Math.round(n/total*100):0;
+    $('allowBar').style.width=pct(a)+'%';$('reviewBar').style.width=pct(r)+'%';$('rejectBar').style.width=pct(x)+'%';$('allowPct').textContent=pct(a)+'%';$('reviewPct').textContent=pct(r)+'%';$('rejectPct').textContent=pct(x)+'%';
+    $('approvalRate').textContent=total?`${pct(a)}% of transactions allowed`:'Waiting for transaction data';
+  }
+  function renderAlerts(stats){
+    const high=(stats.high_risk_transactions||[]).slice(0,3),el=$('alerts');
+    if(!high.length){el.innerHTML='<div class="empty">No active high-risk alerts.<br>The risk engine has no blocked transactions yet.</div>';return;}
+    el.innerHTML=high.map(t=>`<div class="alert"><div class="alert-icon red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l9 17H3L12 3z"/><path d="M12 9v4M12 16h.01"/></svg></div><div><div class="alert-title">High-risk transaction · ${esc(t.risk_score)}/100</div><div class="alert-text">${esc((t.reasons||[]).join(', ')||'Risk engine rejected this transaction.')}</div></div><span class="alert-time">${fmtTime(t.timestamp)}</span></div>`).join('');
+  }
+  async function loadDashboard(){
+    try{
+      const [stats,txs,ready]=await Promise.all([getJSON('/stats'),getJSON('/transactions?limit=50'),getJSON('/ready')]);
+      allTransactions=Array.isArray(txs)?txs:[];
+      $('total').textContent=stats.total_transactions||0;$('allowed').textContent=stats.allowed||0;$('review').textContent=stats.review||0;$('rejected').textContent=stats.rejected||0;
+      renderDistribution(stats);renderTable();renderChart(allTransactions);renderAlerts(stats);$('apiHealth').textContent='HEALTHY';$('dbHealth').textContent=ready.database==='ok'?'READY':'DEGRADED';
+    }catch(err){ $('apiHealth').textContent='OFFLINE';$('dbHealth').textContent='UNKNOWN';$('apiHealth').classList.add('error');console.error(err); }
+  }
+  function showView(view){
+    if(view==='overview'){ $('overviewView').classList.remove('hidden');$('secondaryView').classList.add('hidden'); return; }
+    $('overviewView').classList.add('hidden');$('secondaryView').classList.remove('hidden');
+    const titles={transactions:['Transactions','Inspect and search every transaction received by FraudGuard.'],risk:['Risk Monitor','Review high-risk activity and understand why transactions were flagged.'],analytics:['Analytics','Historical risk and behavioral analytics from the FraudGuard data layer.'],health:['System Health','Service readiness and API dependency status.'],api:['API Explorer','FraudGuard exposes REST endpoints for scoring, analytics, and monitoring.']};
+    const [title,sub]=titles[view]||titles.overview;
+    $('secondaryView').innerHTML=`<div class="hero"><div><h1>${title}</h1><p>${sub}</p></div></div><section class="panel"><div class="panel-head"><div><div class="panel-title">${title}</div><div class="panel-sub">Live data from the running FraudGuard service</div></div><button class="refresh" onclick="loadDashboard()">Refresh</button></div><div id="secondaryBody"></div></section>`;
+    const b=$('secondaryBody');
+    if(view==='transactions'){b.innerHTML='<div class="table-scroll"><table class="table"><thead><tr><th>Transaction</th><th>User</th><th>Amount</th><th>Location</th><th>Device</th><th>Risk</th><th>Decision</th></tr></thead><tbody>'+ (allTransactions.length?allTransactions.map(t=>`<tr><td class="tx-id">${esc(t.transaction_id)}</td><td>${esc(t.user_id)}</td><td class="amount">${fmtMoney(t.amount)}</td><td>${esc(t.location)}</td><td>${esc(t.device_id)}</td><td class="score ${riskClass(t.risk_level)}">${esc(t.risk_score)}/100</td><td><span class="badge ${riskClass(t.risk_level)==='low'?'allow':riskClass(t.risk_level)==='medium'?'review':'reject'}">${esc(t.decision)}</span></td></tr>`).join(''):'<tr><td colspan="7"><div class="empty">No transactions yet.</div></td></tr>')+'</tbody></table></div>';}
+    else if(view==='risk'){b.innerHTML='<div class="alert-list" id="secondaryAlerts"></div>'; const a=$('secondaryAlerts'); const high=allTransactions.filter(t=>t.risk_level==='HIGH'); a.innerHTML=high.length?high.map(t=>`<div class="alert"><div class="alert-icon red">!</div><div><div class="alert-title">${esc(t.transaction_id)} · ${esc(t.risk_score)}/100 · ${esc(t.decision)}</div><div class="alert-text">${esc((t.reasons||[]).join(', ')||'No additional reason recorded.')}</div></div></div>`).join(''):'<div class="empty">No high-risk transactions currently recorded.</div>';}
+    else if(view==='analytics'){b.innerHTML='<div style="padding:20px" id="analyticsBody">Loading analytics…</div>';getJSON('/analytics').then(a=>{$('analyticsBody').innerHTML=`<div class="metrics" style="padding:0;margin:0"><div class="metric"><div class="metric-head">Transaction count</div><div class="metric-value">${a.transaction_count??0}</div></div><div class="metric"><div class="metric-head">Average amount</div><div class="metric-value">${fmtMoney(a.average_amount)}</div></div><div class="metric"><div class="metric-head">Average risk</div><div class="metric-value">${a.average_risk_score??0}</div></div></div>`}).catch(()=>{$('analyticsBody').textContent='Analytics unavailable.'});}
+    else if(view==='health'){b.innerHTML='<div class="health"><div class="health-item"><span class="health-name"><i class="dot"></i> FastAPI service</span><span class="health-ok">HEALTHY</span></div><div class="health-item"><span class="health-name"><i class="dot"></i> SQLite database</span><span class="health-ok">READY</span></div><div class="health-item"><span class="health-name"><i class="dot"></i> Rules engine</span><span class="health-ok">READY</span></div><div class="health-item"><span class="health-name"><i class="dot"></i> Isolation Forest</span><span class="health-ok">AVAILABLE</span></div></div>';}
+    else {b.innerHTML='<div style="padding:25px;font-size:12px;line-height:1.8;color:var(--muted)"><strong style="color:var(--ink)">Available endpoints</strong><br><code>GET /health</code> — liveness<br><code>GET /ready</code> — database readiness<br><code>POST /transactions</code> — score a transaction<br><code>GET /transactions</code> — transaction history<br><code>GET /stats</code> — operational statistics<br><code>GET /analytics</code> — pandas analytics<br><code>GET /analytics/anomalies</code> — Isolation Forest analysis</div>';}
+  }
+  document.querySelectorAll('.nav button').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));btn.classList.add('active');showView(btn.dataset.view);}));
+  document.querySelectorAll('[data-view-link]').forEach(btn=>btn.addEventListener('click',()=>showView(btn.dataset.viewLink)));
+  $('refreshBtn').addEventListener('click',loadDashboard); $('search').addEventListener('input',e=>{const q=e.target.value.toLowerCase();renderTable(allTransactions.filter(t=>[t.transaction_id,t.user_id,t.location,t.device_id,t.decision].some(v=>String(v||'').toLowerCase().includes(q))))});
+  loadDashboard(); setInterval(loadDashboard,30000);
+</script>
 </body>
 </html>
