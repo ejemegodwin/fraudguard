@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FraudGuard Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 24px; background: #f5f5f5; color: #222; }
+    h1 { margin-top: 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .card { background: white; padding: 18px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .value { font-size: 28px; font-weight: 700; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; background: white; }
+    th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }
+    th { background: #eee; }
+    .HIGH { font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>FraudGuard Dashboard</h1>
+  <div class="grid">
+    <div class="card">Transactions<div class="value" id="total">-</div></div>
+    <div class="card">Allowed<div class="value" id="allowed">-</div></div>
+    <div class="card">Review<div class="value" id="review">-</div></div>
+    <div class="card">Rejected<div class="value" id="rejected">-</div></div>
+    <div class="card">Average Risk<div class="value" id="average">-</div></div>
+  </div>
+
+  <h2>Recent transactions</h2>
+  <table>
+    <thead><tr><th>ID</th><th>User</th><th>Amount</th><th>Score</th><th>Decision</th><th>Reasons</th></tr></thead>
+    <tbody id="transactions"></tbody>
+  </table>
+
+  <script>
+    async function loadDashboard() {
+      const stats = await fetch('/stats').then(r => r.json());
+      document.getElementById('total').textContent = stats.total_transactions;
+      document.getElementById('allowed').textContent = stats.allowed;
+      document.getElementById('review').textContent = stats.review;
+      document.getElementById('rejected').textContent = stats.rejected;
+      document.getElementById('average').textContent = stats.average_risk_score;
+
+      const transactions = await fetch('/transactions?limit=50').then(r => r.json());
+      document.getElementById('transactions').innerHTML = transactions.map(t => `
+        <tr>
+          <td>${t.transaction_id}</td>
+          <td>${t.user_id}</td>
+          <td>₦${Number(t.amount).toLocaleString()}</td>
+          <td>${t.risk_score}</td>
+          <td class="${t.risk_level}">${t.decision}</td>
+          <td>${t.reasons.join(', ') || 'None'}</td>
+        </tr>
+      `).join('');
+    }
+
+    loadDashboard().catch(error => {
+      document.getElementById('transactions').innerHTML = `<tr><td colspan="6">Dashboard error: ${error}</td></tr>`;
+    });
+  </script>
+</body>
+</html>
