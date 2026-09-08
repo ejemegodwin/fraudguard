@@ -1,7 +1,10 @@
+import json
+
 from fastapi import FastAPI, HTTPException
 
 from app.database import get_connection, initialize_database
 from app.schemas import TransactionCreate, TransactionResponse
+from app.services.risk_engine import calculate_risk_score
 
 app = FastAPI(title="FraudGuard", version="0.1.0")
 
@@ -9,8 +12,6 @@ initialize_database()
 
 
 def row_to_response(row, duplicate: bool = False) -> TransactionResponse:
-    import json
-
     return TransactionResponse(
         transaction_id=row["transaction_id"],
         user_id=row["user_id"],
@@ -63,12 +64,17 @@ def create_transaction(transaction: TransactionCreate):
                 detail="transaction_id already exists with different data",
             )
 
+        score, risk_level, decision, reasons = calculate_risk_score(
+            transaction.timestamp
+        )
+
         connection.execute(
             """
             INSERT INTO transactions (
                 transaction_id, user_id, amount, timestamp,
-                location, device_id
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                location, device_id, risk_score, risk_level,
+                decision, reasons
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 transaction.transaction_id,
@@ -77,6 +83,10 @@ def create_transaction(transaction: TransactionCreate):
                 transaction.timestamp.isoformat(),
                 transaction.location,
                 transaction.device_id,
+                score,
+                risk_level,
+                decision,
+                json.dumps(reasons),
             ),
         )
         connection.commit()
