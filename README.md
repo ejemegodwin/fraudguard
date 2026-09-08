@@ -20,23 +20,24 @@ Customer
    v
 Go E-commerce Service
    |
-   +--> Persistent Order
-   |       |
-   |       +--> PENDING / REVIEW / REJECTED
-   |
    +--> FraudGuard risk check
    |       |
    |       +--> ALLOW / REVIEW / REJECT
    |
-   +--> Flutterwave checkout
+   +--> Persistent Order
    |       |
-   |       +--> PAYMENT_INITIALIZED
-   |       +--> PAID / FAILED
+   |       +--> PENDING / REVIEW / APPROVED / PAYMENT_INITIALIZED / PAID / FAILED / REJECTED
    |
-   +--> Flutterwave verification/webhook
+   +--> Flutterwave
+   |       |
+   |       +--> hosted checkout
+   |       +--> server-side verification
+   |       +--> webhook
    |
-   v
-Order completed
+   +--> Admin review
+           |
+           +--> REVIEW → APPROVED → payment
+           +--> REVIEW → REJECTED
 
 FraudGuard (Python/FastAPI)
    |
@@ -140,7 +141,7 @@ Added `/dashboard` with transaction counts, decisions, average risk, recent tran
 Added a Dockerfile for the Python FraudGuard service.
 
 ## Step 23 — Persistent payment state and webhook idempotency ✅
-Added `go-service/internal/payments/store.go` with persistent JSON-backed payment state.
+Added persistent JSON-backed payment state with controlled payment transitions and hosted payment-link persistence.
 
 Payment lifecycle:
 
@@ -152,72 +153,32 @@ PAYMENT_INITIALIZED
    └──→ FAILED
 ```
 
-The payment record stores the internal transaction reference, expected amount, currency, status, optional Flutterwave transaction ID, and update timestamp. Successful callbacks and webhooks re-verify Flutterwave before marking a payment `PAID`. A webhook for an already-paid transaction is acknowledged without processing it again.
-
 ## Step 24 — Persistent order lifecycle ✅
-Added `go-service/internal/orders/store.go` so the Go service now owns a persistent order record as well as payment state.
-
-Each checkout creates an order ID and links it to the FraudGuard transaction:
-
-```text
-Order Created
-     ↓
-   PENDING
-     ↓
-PAYMENT_INITIALIZED
-     ↓
-    PAID
-```
-
-Risk outcomes are also represented:
-
-```text
-REVIEW   → order held, no payment
-REJECTED → order blocked, no payment
-```
-
-The order stores:
-
-- `order_id`
-- `transaction_id`
-- `user_id`
-- `amount`
-- `currency`
-- `status`
-- `payment_status`
-- creation/update timestamps
-
-New endpoint:
-
-```text
-GET /orders?id=<order_id>
-GET /orders?transaction_id=<transaction_id>
-```
-
-The callback and webhook now update both payment and order state after successful server-side verification. This establishes the important ownership boundary: **Go owns orders/payments; Python owns fraud intelligence and transaction history.**
-
-The current JSON stores are an MVP persistence layer. Production needs a transactional database and atomic order/payment state transitions.
+Added persistent Go order state linked to each FraudGuard transaction. Orders retain customer checkout information and the risk decision that produced the order state.
 
 ## Step 25 — Order management queries and pagination ✅
-Expanded the Go order API so orders can now be queried as a collection, not only by a single ID.
+Added `GET /orders` filtering by user/status plus `limit`/`offset` pagination, while retaining direct lookup by order ID or transaction ID.
 
-Supported queries:
+## Step 26 — Controlled human fraud-review workflow and final hardening pass ✅
+Completed the full MVP pass in one integrated implementation instead of continuing feature-by-feature.
 
-```text
-GET /orders
-GET /orders?user_id=<user_id>
-GET /orders?status=<status>
-GET /orders?user_id=<user_id>&status=<status>
-GET /orders?limit=<1-100>&offset=<0+>
-GET /orders?id=<order_id>
-GET /orders?transaction_id=<transaction_id>
-```
+Implemented:
 
-Collection responses return an `orders` array together with the applied `limit` and `offset`.
-
-The order store sorts results newest-first and supports user/status filtering plus offset pagination. Tests now cover filtering, ordering, persistence, and pagination.
-
-The API deliberately does **not** expose a generic public status-mutation endpoint yet. Order status changes currently happen through the controlled checkout/payment workflow. This prevents an arbitrary caller from marking an order `PAID` without verified payment. A dedicated authenticated review/admin workflow will be added after the order model stores the customer information needed to safely resume a reviewed checkout.
+- Refactored the Go service around an injectable `Server` and dedicated `http.ServeMux`.
+- Added controlled order state transitions.
+- Added persisted customer email/name/phone data to reviewed orders so approved checkouts can resume safely.
+- Persisted FraudGuard score, level, decision, and reasons on orders.
+- Added authenticated admin review endpoints:
+  - `POST /admin/orders/{order_id}/approve`
+  - `POST /admin/orders/{order_id}/reject`
+- Added constant-time admin API-key verification with `ADMIN_API_KEY`.
+- Approval transitions `REVIEW → APPROVED → PAYMENT_INITIALIZED` and returns the hosted payment link.
+- Rejection transitions `REVIEW → REJECTED` without creating payment.
+- Prevented arbitrary public order-status mutation, especially fake `PAID` transitions.
+- Hardened payment transitions and persisted hosted payment links.
+- Added bounded JSON request bodies and stricter single-object JSON decoding.
+- Kept callback/webhook payment verification server-side and idempotent.
+- Updated integration documentation to describe the completed workflow.
 
 # API Quick Reference
 
@@ -240,6 +201,8 @@ The API deliberately does **not** expose a generic public status-mutation endpoi
 | Go | `GET` | `/orders?transaction_id=...` | Find order by transaction |
 | Go | `GET` | `/orders?user_id=...` | List a user's orders |
 | Go | `GET` | `/orders?status=...` | List orders by status |
+| Go | `POST` | `/admin/orders/{id}/approve` | Approve a reviewed order and initialize payment |
+| Go | `POST` | `/admin/orders/{id}/reject` | Reject a reviewed order |
 | Go | `GET` | `/payment/callback` | Server-side payment verification |
 | Go | `POST` | `/webhooks/flutterwave` | Flutterwave webhook receiver |
 
@@ -277,6 +240,7 @@ FRAUDGUARD_URL=http://127.0.0.1:8000
 PORT=8080
 PAYMENT_STORE_PATH=payments.json
 ORDER_STORE_PATH=orders.json
+ADMIN_API_KEY=<long random admin key>
 FLW_SECRET_KEY=<your Flutterwave server secret>
 FLW_SECRET_HASH=<your Flutterwave webhook secret hash>
 FLW_REDIRECT_URL=http://localhost:8080/payment/callback
@@ -302,13 +266,13 @@ Never commit real credentials or secret hashes.
 
 If FraudGuard returns `ALLOW`, Go creates an order, creates pending payment state, initializes Flutterwave, and returns the hosted `payment_link`.
 
-If FraudGuard returns `REVIEW`, Go creates an order in `REVIEW` and returns HTTP `202` without initializing payment.
+If FraudGuard returns `REVIEW`, Go creates an order in `REVIEW` and returns HTTP `202` without initializing payment. An authorized admin can then approve or reject it.
 
 If FraudGuard returns `REJECT`, Go creates an order in `REJECTED` and returns HTTP `403` without initializing payment.
 
 # MVP Status
 
-The repository now contains:
+The integrated MVP is now **feature-complete for the planned development scope**:
 
 - Python fraud microservice
 - Explainable fraud rules
@@ -317,40 +281,44 @@ The repository now contains:
 - Transaction history
 - pandas analytics
 - Isolation Forest anomaly analysis
-- Automated tests and GitHub Actions CI
+- Automated Python/Go tests and GitHub Actions CI
 - Browser dashboard
 - Go FraudGuard client
 - Go risk-gating service
 - Persistent Go payment state
 - Persistent Go order state
+- Customer data retained for reviewed checkouts
 - Order listing, filtering, and pagination
+- Controlled order/payment state transitions
+- Human fraud-review approval/rejection workflow
 - Flutterwave payment initialization
 - Flutterwave server-side verification
 - Idempotent webhook boundary
 - Docker deployment foundation
+- Integration and architecture documentation
 
-The system is **development/MVP ready**, not yet a production financial system.
+The system is **development/MVP ready**, not a production financial platform yet.
 
 # Production Hardening Checklist
 
 Before real-money production use:
 
-- Replace JSON order/payment persistence with PostgreSQL or another transactional production database.
+- Replace JSON order/payment persistence with PostgreSQL or another transactional database.
 - Store money as integer minor units such as kobo, not floating-point values.
-- Add authentication/authorization between Go and FraudGuard.
+- Add authenticated service-to-service communication between Go and FraudGuard.
 - Use HTTPS/private networking.
-- Add retries, circuit-breaking, and appropriate timeouts.
-- Make webhook event processing fully persistent and idempotent.
-- Enforce valid order/payment state transitions transactionally.
-- Verify Flutterwave amount, currency, and transaction reference against the stored order before fulfillment.
-- Add structured logging and monitoring.
-- Add rate limiting.
+- Persist webhook event IDs and make webhook processing transactional and idempotent.
+- Enforce order/payment transitions atomically in the database.
+- Add structured logging, metrics, tracing, rate limiting, retries, and circuit breakers.
+- Replace the single admin API key with an audited identity/role system.
+- Add inventory/fulfillment only after verified payment and valid terminal order state.
 - Add model/data drift monitoring.
 - Tune fraud thresholds using representative governed data.
-- Establish a human-review workflow for `REVIEW` decisions.
 - Store secrets in a secret manager.
-- Add audit logging for risk decisions and payment state changes.
+- Add audit logging for risk decisions, admin actions, and payment state changes.
 
 # Development Philosophy
 
-FraudGuard starts with explainable rules and then adds statistical and machine-learning analysis. The Go service owns the fast e-commerce path, order lifecycle, and payment boundary, while Python owns fraud intelligence and historical analysis.
+FraudGuard starts with explainable rules and then adds statistical and machine-learning analysis. The Go service owns the fast e-commerce path, order lifecycle, review workflow, and payment boundary, while Python owns fraud intelligence and historical analysis.
+
+The planned MVP scope is complete. Future work should focus on production infrastructure, database transactions, authentication, observability, and tuning—not on extending the core proof-of-concept architecture.
