@@ -1,15 +1,16 @@
 # FraudGuard
 
-FraudGuard is a Python-based fraud and anomaly detection microservice for an e-commerce system.
+FraudGuard is a fraud and anomaly detection system for an e-commerce application.
 
 The project uses a polyglot architecture:
 
-- **Go** owns the e-commerce request path and payment integration.
+- **Go** owns the e-commerce request path, risk-gating, and payment integration.
 - **FraudGuard (Python)** stores transaction history, analyzes behavior, and calculates risk.
 - **FastAPI** exposes FraudGuard through HTTP/REST.
 - **SQLite** is the initial MVP database.
 - **pandas** provides historical transaction analytics.
 - **scikit-learn / Isolation Forest** provides optional anomaly analysis after enough history exists.
+- **Flutterwave** handles payment checkout after FraudGuard allows the transaction.
 
 ## Architecture
 
@@ -19,12 +20,24 @@ Customer
    v
 Go E-commerce Service
    |
-   | transaction event / risk request
+   +--> FraudGuard risk check
+   |       |
+   |       +--> ALLOW / REVIEW / REJECT
+   |               |       |       |
+   |               |       |       +--> block order
+   |               |       +----------> hold order
+   |               +------------------> initialize payment
+   |
+   +--> Flutterwave checkout
+   |
+   +--> Flutterwave verification/webhook
+   |
    v
+Order completed
+
 FraudGuard (Python/FastAPI)
    |
    +--> SQLite transaction history
-   |
    +--> Rules Engine
    |      +--> Time of day
    |      +--> Amount deviation
@@ -32,17 +45,9 @@ FraudGuard (Python/FastAPI)
    |      +--> Cold start
    |      +--> Device consistency
    |      +--> Location consistency
-   |
    +--> Explainable Risk Score
-   |
-   +--> ALLOW / REVIEW / REJECT
-   |
    +--> pandas analytics
-   |
    +--> Isolation Forest anomaly analysis
-   |
-   v
-Go continues, reviews, or blocks the order
 ```
 
 ## Project Structure
@@ -66,6 +71,13 @@ fraudguard/
 ├── tests/
 │   ├── test_api.py
 │   └── test_risk_engine.py
+├── go-service/
+│   ├── cmd/server/main.go
+│   ├── internal/fraudguard/client.go
+│   ├── internal/flutterwave/client.go
+│   └── go.mod
+├── .github/workflows/test.yml
+├── Dockerfile
 ├── requirements.txt
 ├── .gitignore
 └── README.md
@@ -75,12 +87,7 @@ fraudguard/
 
 ## Step 1 — Project foundation ✅
 
-Created the Python/FastAPI project foundation with:
-
-- Python
-- FastAPI
-- Pydantic
-- SQLite
+Created the Python/FastAPI project foundation with Python, FastAPI, Pydantic, and SQLite.
 
 Base endpoints:
 
@@ -105,7 +112,7 @@ FraudGuard calculates the risk score itself. Clients cannot submit a trusted ris
 
 ## Step 3 — SQLite database ✅
 
-Created a `transactions` table containing transaction data and fraud results.
+Created a `transactions` table containing transaction data and fraud results, with an index on `(user_id, timestamp)` for behavioral-history queries.
 
 Stored decision fields:
 
@@ -114,27 +121,15 @@ Stored decision fields:
 - `decision`
 - `reasons`
 
-An index on `(user_id, timestamp)` supports behavioral-history queries.
-
 ## Step 4 — Duplicate transaction protection ✅
 
 `transaction_id` is the primary key.
 
-### Exact duplicate
+Same ID + same immutable transaction data returns the original result with `duplicate: true`.
 
-Same ID + same immutable transaction data returns the original stored result with:
+Same ID + different data returns HTTP `409 Conflict`.
 
-```json
-"duplicate": true
-```
-
-No second transaction is created and the transaction is not rescored.
-
-### Conflicting ID
-
-Same ID + different transaction data returns HTTP `409 Conflict`.
-
-The database uniqueness constraint is also handled as the final authority if concurrent requests race to create the same ID.
+The database uniqueness constraint is also handled when concurrent requests race to create the same ID.
 
 ## Step 5 — Initial risk engine ✅
 
@@ -146,14 +141,7 @@ The thresholds and weights are MVP values and must be tuned against real, proper
 
 ## Step 6 — Apply risk scoring ✅
 
-`POST /transactions` now:
-
-1. Validates the request.
-2. Checks for an existing transaction ID.
-3. Loads the user's history.
-4. Runs the risk engine.
-5. Stores the calculated result.
-6. Returns the decision.
+`POST /transactions` now validates the request, checks the transaction ID, loads the user's history, calculates risk, stores the result, and returns the decision.
 
 ## Step 7 — Amount deviation ✅
 
@@ -178,26 +166,13 @@ The rule activates only when at least 3 historical transactions exist.
 
 FraudGuard counts previous transactions from the same user in the last 10 minutes.
 
-Current MVP rule:
-
-```text
-5+ previous transactions
-within 10 minutes
-        |
-        v
-High velocity detected
-        |
-        v
-     +30 points
-```
+Current MVP rule: 5 or more previous transactions in that window adds `+30` points.
 
 The current transaction is not counted twice because scoring occurs before insertion.
 
 ## Step 9 — Cold-start detection ✅
 
-Users with fewer than 3 historical transactions receive a small `+5` informational risk increase and a reason explaining that behavioral history is limited.
-
-This prevents FraudGuard from making strong behavioral claims with insufficient data.
+Users with fewer than 3 historical transactions receive `+5` points and an explanation that behavioral history is limited.
 
 ## Step 10 — Behavioral consistency ✅
 
@@ -207,13 +182,9 @@ For users with enough history, FraudGuard checks:
 - New location → `+15`
 - Unusual transaction time → `+10`
 
-These signals are combined with amount and velocity signals.
-
 ## Step 11 — Explainable risk scoring engine ✅
 
 The risk engine combines the rules into one score capped at 100.
-
-Current MVP weights:
 
 | Signal | Points |
 |---|---:|
@@ -223,8 +194,6 @@ Current MVP weights:
 | New device | +15 |
 | New location | +15 |
 | Cold start | +5 |
-
-A transaction can trigger multiple signals.
 
 ### Decision bands
 
@@ -240,104 +209,120 @@ These are development thresholds, not production fraud policy.
 
 Implemented:
 
-- `GET /transactions` — list transactions.
-- `GET /transactions?user_id=user_123` — filter by user.
-- `GET /transactions/{transaction_id}` — retrieve one transaction.
-- `GET /stats` — totals, average risk, and recent high-risk transactions.
+- `GET /transactions`
+- `GET /transactions?user_id=user_123`
+- `GET /transactions/{transaction_id}`
+- `GET /stats`
 
-Pagination is available through `limit` and `offset` on the list endpoint.
+Pagination is available through `limit` and `offset`.
 
-## Step 13 — Automated tests ✅
+## Step 13 — Automated tests and CI ✅
 
-Added pytest coverage for:
+Added pytest coverage for validation, duplicate handling, conflicts, transaction lookup, risk rules, statistics, and analytics.
 
-- Valid transactions
-- Invalid amounts
-- Duplicate transactions
-- Conflicting transaction IDs
-- Missing transaction lookup
-- Time-of-day detection
-- Amount deviation
-- Velocity detection
-- New device/location detection
-- Score capping
-- Query and statistics endpoints
+GitHub Actions now runs the Python test suite automatically on pushes and pull requests to `main`.
 
-Run locally with:
+Run locally:
 
 ```bash
 pytest
 ```
 
-## Step 14 — Go integration ✅ READY
+## Step 14 — Go FraudGuard client ✅
 
-FraudGuard now has a documented HTTP contract for the Go e-commerce service.
+Added a real Go HTTP client under `go-service/internal/fraudguard`.
 
-Go should:
+It:
+
+- Sends transactions to FraudGuard.
+- Uses request contexts and timeouts.
+- Decodes risk decisions.
+- Treats non-2xx FraudGuard responses as errors.
+
+## Step 15 — Go risk-gating service ✅
+
+Added `go-service/cmd/server/main.go`.
+
+The Go service exposes:
 
 ```text
-Create transaction ID
-        |
-        v
-POST /transactions
-        |
-        v
-Read decision
-   /     |      \
-ALLOW  REVIEW  REJECT
-  |       |       |
-continue  hold    block
+POST /risk-check
 ```
 
-The complete integration contract and Go request example are in [`docs/integration.md`](docs/integration.md).
+The endpoint creates a transaction ID, sends the transaction to FraudGuard, and returns the risk decision.
 
-The actual Go e-commerce service is outside this repository, so FraudGuard is integration-ready rather than pretending a separate Go service has already been connected.
-
-## Step 15 — Payment integration ✅ BOUNDARY DEFINED
-
-Flutterwave remains in the Go service.
-
-FraudGuard does not process payments or store payment credentials/card details.
-
-Recommended order:
+For the complete checkout flow, Go now enforces:
 
 ```text
-Order
-  |
-  v
+FraudGuard
+   |
+   +--> REJECT → HTTP 403, no payment
+   +--> REVIEW → HTTP 202, no payment
+   +--> ALLOW  → continue to payment
+```
+
+## Step 16 — Flutterwave checkout integration ✅
+
+Added a Go Flutterwave client.
+
+The checkout endpoint is:
+
+```text
+POST /checkout
+```
+
+Flow:
+
+```text
+POST /checkout
+      |
+      v
 FraudGuard risk check
-  |
-  +--> REJECT → stop
-  +--> REVIEW → hold
-  +--> ALLOW  → continue
-                  |
-                  v
-          Flutterwave payment
-                  |
-                  v
-           Verify payment
-                  |
-                  v
-            Complete order
+      |
+      +--> REJECT → stop
+      +--> REVIEW → hold
+      +--> ALLOW
+           |
+           v
+      Flutterwave
+           |
+           v
+      payment_link
 ```
 
-The separation of responsibilities is documented in `docs/integration.md`.
+Flutterwave Standard's server-side payment flow creates a payment and returns a hosted payment link. citeturn0search6
 
-## Step 16 — Data analysis with pandas ✅
+## Step 17 — Flutterwave verification and callback ✅
+
+Added:
+
+```text
+GET /payment/callback
+```
+
+The callback does not blindly trust the browser redirect. It re-queries Flutterwave's verification endpoint and exposes the verified result.
+
+The verification checks are based on Flutterwave's guidance to verify the transaction status, reference, amount, and currency before giving value. citeturn0search0turn0search2
+
+## Step 18 — Flutterwave webhook boundary ✅
+
+Added:
+
+```text
+POST /webhooks/flutterwave
+```
+
+The endpoint validates the configured webhook secret hash and acknowledges valid events quickly.
+
+Production order fulfillment should process the event idempotently and re-query Flutterwave before giving value. Flutterwave specifically recommends signature validation, quick acknowledgement, idempotent handling, and server-side verification. citeturn1search0turn1search5
+
+## Step 19 — Data analysis with pandas ✅
 
 Added `app/services/analytics.py`.
 
-The `/analytics` endpoint reports:
+The `/analytics` endpoint reports transaction count, average amount, median amount, maximum amount, and average risk score.
 
-- Transaction count
-- Average amount
-- Median amount
-- Maximum amount
-- Average risk score
-
-This creates the statistical foundation for future model tuning.
-
-## Step 17 — Machine-learning anomaly detection ✅
+## Step 20 — Machine-learning anomaly detection ✅
 
 Added `app/services/anomaly_model.py` using scikit-learn's `IsolationForest`.
 
@@ -347,52 +332,53 @@ Endpoint:
 GET /analytics/anomalies
 ```
 
-The model requires at least 20 usable historical records before running. It uses:
+The model requires at least 20 usable historical records and uses amount, existing risk score, transaction hour, and day of week.
 
-- Transaction amount
-- Existing risk score
-- Transaction hour
-- Day of week
+ML remains separate from the authoritative rules-engine decision so the MVP stays explainable.
 
-ML is deliberately separate from the authoritative rules-engine decision. This keeps the MVP explainable while allowing anomaly research to grow alongside the rules.
+## Step 21 — FraudGuard dashboard ✅
 
-## Step 18 — FraudGuard dashboard ✅
-
-Added a lightweight browser dashboard at:
+Added:
 
 ```text
 GET /dashboard
 ```
 
-It displays:
+The dashboard displays total transactions, allowed/reviewed/rejected counts, average risk score, recent transactions, and fraud reasons.
 
-- Total transactions
-- Allowed transactions
-- Transactions under review
-- Rejected transactions
-- Average risk score
-- Recent transaction decisions
-- Fraud reasons
+## Step 22 — Container and deployment foundation ✅
 
-The dashboard consumes the FraudGuard API, so it can later be replaced with a React/Flutter frontend without changing the risk engine.
+Added a Dockerfile for the Python FraudGuard service.
+
+The service can be started with:
+
+```bash
+docker build -t fraudguard .
+docker run -p 8000:8000 fraudguard
+```
 
 # API Quick Reference
 
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `GET` | `/` | Service information |
-| `GET` | `/health` | Health check |
-| `GET` | `/dashboard` | Monitoring dashboard |
-| `POST` | `/transactions` | Score and store a transaction |
-| `GET` | `/transactions` | List transactions |
-| `GET` | `/transactions/{transaction_id}` | Get one transaction |
-| `GET` | `/stats` | Operational statistics |
-| `GET` | `/analytics` | pandas-based statistics |
-| `GET` | `/analytics/anomalies` | Isolation Forest anomaly analysis |
+| Service | Method | Endpoint | Purpose |
+|---|---|---|---|
+| FraudGuard | `GET` | `/` | Service information |
+| FraudGuard | `GET` | `/health` | Health check |
+| FraudGuard | `GET` | `/dashboard` | Monitoring dashboard |
+| FraudGuard | `POST` | `/transactions` | Score and store a transaction |
+| FraudGuard | `GET` | `/transactions` | List transactions |
+| FraudGuard | `GET` | `/transactions/{transaction_id}` | Get one transaction |
+| FraudGuard | `GET` | `/stats` | Operational statistics |
+| FraudGuard | `GET` | `/analytics` | pandas statistics |
+| FraudGuard | `GET` | `/analytics/anomalies` | Isolation Forest analysis |
+| Go | `GET` | `/health` | Go service health |
+| Go | `POST` | `/risk-check` | Risk-only decision |
+| Go | `POST` | `/checkout` | Risk gate + payment initialization |
+| Go | `GET` | `/payment/callback` | Server-side payment verification |
+| Go | `POST` | `/webhooks/flutterwave` | Flutterwave webhook receiver |
 
-FastAPI also provides generated API documentation at `/docs` and `/redoc` when the service is running.
+FastAPI also provides generated API documentation at `/docs` and `/redoc`.
 
-# Example Transaction
+# Example FraudGuard Transaction
 
 ```json
 {
@@ -405,59 +391,12 @@ FastAPI also provides generated API documentation at `/docs` and `/redoc` when t
 }
 ```
 
-Example response shape:
-
-```json
-{
-  "transaction_id": "txn_8f31c2",
-  "user_id": "user_123",
-  "amount": 450000,
-  "timestamp": "2026-09-08T10:25:31+01:00",
-  "location": "Lagos",
-  "device_id": "device_456",
-  "risk_score": 87,
-  "risk_level": "HIGH",
-  "decision": "REJECT",
-  "reasons": [
-    "Unusually high transaction amount",
-    "New device detected",
-    "New location detected"
-  ],
-  "duplicate": false
-}
-```
-
-The exact score depends on the user's stored transaction history.
-
 # Running FraudGuard
-
-Create and activate a virtual environment:
 
 ```bash
 python -m venv .venv
-```
-
-Linux/macOS:
-
-```bash
 source .venv/bin/activate
-```
-
-Windows PowerShell:
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-Install dependencies:
-
-```bash
 pip install -r requirements.txt
-```
-
-Start the server:
-
-```bash
 uvicorn app.main:app --reload
 ```
 
@@ -474,50 +413,95 @@ Run tests:
 pytest
 ```
 
+# Running the Go Service
+
+From `go-service/`:
+
+```bash
+go run ./cmd/server
+```
+
+Environment variables:
+
+```text
+FRAUDGUARD_URL=http://127.0.0.1:8000
+PORT=8080
+FLW_SECRET_KEY=<your Flutterwave server secret>
+FLW_SECRET_HASH=<your Flutterwave webhook secret hash>
+FLW_REDIRECT_URL=http://localhost:8080/payment/callback
+FLW_BASE_URL=https://api.flutterwave.com/v3
+```
+
+**Never commit real keys or secret hashes to GitHub.** Flutterwave recommends keeping API credentials server-side and in environment variables/secrets managers. citeturn1search4turn1search6
+
+# Example Go Checkout Request
+
+```json
+{
+  "user_id": "user_123",
+  "amount": 450000,
+  "location": "Lagos",
+  "device_id": "device_456",
+  "email": "customer@example.com",
+  "name": "Customer Name",
+  "phone_number": "+2348012345678",
+  "currency": "NGN"
+}
+```
+
+If FraudGuard returns `ALLOW`, Go initializes Flutterwave and returns the hosted `payment_link`.
+
+If FraudGuard returns `REVIEW`, Go returns HTTP `202` and does not initialize payment.
+
+If FraudGuard returns `REJECT`, Go returns HTTP `403` and does not initialize payment.
+
+# Integration Documentation
+
+See [`docs/integration.md`](docs/integration.md) for the complete service contract, payment boundary, retry considerations, and production hardening guidance.
+
 # MVP Status
 
-FraudGuard now contains the complete Python-side MVP:
+The repository now contains:
 
-- Transaction ingestion
-- Validation
+- Python fraud microservice
+- Explainable fraud rules
 - SQLite persistence
-- Idempotent duplicate handling
-- Conflict detection
-- Time-of-day detection
-- Amount deviation
-- Velocity detection
-- Cold-start handling
-- Device/location consistency
-- Explainable risk scoring
-- ALLOW / REVIEW / REJECT decisions
-- Transaction queries
-- Operational statistics
-- pandas analytics
+- Idempotency/conflict handling
+- Transaction history
+- Statistical analytics
 - Isolation Forest anomaly analysis
 - Automated tests
+- GitHub Actions CI
 - Browser dashboard
-- Go integration contract
-- Flutterwave integration boundary
+- Go FraudGuard client
+- Go risk-gating service
+- Flutterwave payment initialization
+- Flutterwave server-side verification
+- Flutterwave webhook endpoint
+- Docker deployment foundation
 
-The only pieces not physically implemented in this repository are the separate Go e-commerce application and its live Flutterwave credentials/API connection. FraudGuard is intentionally isolated from those concerns.
+The system is **development/MVP ready**. It is not yet a production financial system until the production hardening items below are completed and the thresholds are validated against real data.
 
 # Production Hardening Checklist
 
-Before using this system for real-money production decisions:
+Before real-money production use:
 
 - Replace SQLite with PostgreSQL or another production database.
-- Store monetary values as integer minor units (for example, kobo), not floating-point values.
-- Add authentication and authorization between Go and FraudGuard.
-- Add HTTPS/private networking.
-- Add request timeouts, retries, and circuit-breaking in Go.
+- Store money as integer minor units (for example, kobo), not floating-point values.
+- Add authentication/authorization between Go and FraudGuard.
+- Use HTTPS/private networking.
+- Add request timeouts, retries, and circuit-breaking.
+- Persist Go orders/payment references in a production database.
+- Make webhook event processing fully persistent and idempotent.
+- Verify Flutterwave amount, currency, and transaction reference against the stored order before fulfillment.
 - Add structured logging and monitoring.
 - Add rate limiting.
 - Add model/data drift monitoring.
-- Tune thresholds using representative, governed historical data.
+- Tune fraud thresholds using representative, governed historical data.
 - Establish a human-review workflow for `REVIEW` decisions.
-- Protect all secrets with environment variables or a secret manager.
-- Add audit logging for risk decisions.
+- Store secrets in a secret manager.
+- Add audit logging for risk decisions and payment state changes.
 
 # Development Philosophy
 
-FraudGuard starts with explainable rules and then adds statistical and machine-learning analysis. This makes the system easier to understand, test, debug, and integrate while historical transaction data accumulates.
+FraudGuard starts with explainable rules and then adds statistical and machine-learning analysis. The Go service owns the fast e-commerce path and payment boundary, while Python owns fraud intelligence and historical analysis.
