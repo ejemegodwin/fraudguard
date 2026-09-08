@@ -9,7 +9,7 @@ MIN_HISTORY_FOR_BEHAVIOR = 3
 AMOUNT_DEVIATION_MULTIPLIER = 3.0
 
 
-NORMALIZE_REASONS = {
+REASONS = {
     "amount": "Unusually high transaction amount",
     "velocity": "High transaction velocity detected",
     "cold_start": "Limited transaction history for this user",
@@ -32,6 +32,8 @@ def _parse_timestamp(value: str) -> datetime:
 def calculate_risk_score(
     timestamp: datetime,
     amount: float,
+    device_id: str,
+    location: str,
     historical_transactions: Iterable[dict],
 ) -> tuple[int, str, str, list[str]]:
     """Calculate an explainable MVP fraud score from transaction history."""
@@ -44,13 +46,24 @@ def calculate_risk_score(
     # Rule 1: time of day.
     if 0 <= timestamp.hour < 5:
         score += 10
-        reasons.append(NORMALIZE_REASONS["time"])
+        reasons.append(REASONS["time"])
 
-    # Rule 2: cold start. We do not make strong behavioral claims without
-    # enough history, so this is only a small informational risk increase.
+    # Rule 2: velocity. The current transaction is not stored yet, so only
+    # previous transactions in the last 10 minutes are counted.
+    window_start = timestamp - timedelta(minutes=TIME_WINDOW_MINUTES)
+    recent_count = sum(
+        1
+        for row in history
+        if window_start <= _parse_timestamp(row["timestamp"]) <= timestamp
+    )
+    if recent_count >= VELOCITY_LIMIT:
+        score += 25
+        reasons.append(REASONS["velocity"])
+
+    # Rules based on behavioral history require a minimum number of records.
     if len(history) < MIN_HISTORY_FOR_BEHAVIOR:
         score += 5
-        reasons.append(NORMALIZE_REASONS["cold_start"])
+        reasons.append(REASONS["cold_start"])
     else:
         amounts = [float(row["amount"]) for row in history]
         average_amount = mean(amounts)
@@ -59,34 +72,19 @@ def calculate_risk_score(
         # historical average is treated as unusually large for this MVP.
         if average_amount > 0 and amount >= average_amount * AMOUNT_DEVIATION_MULTIPLIER:
             score += 30
-            reasons.append(NORMALIZE_REASONS["amount"])
+            reasons.append(REASONS["amount"])
 
         # Rule 4: behavioral consistency.
         known_devices = {row["device_id"] for row in history}
         known_locations = {row["location"] for row in history}
 
-        current_device = history[0]["_current_device"] if history and "_current_device" in history[0].keys() else None
-        current_location = history[0]["_current_location"] if history and "_current_location" in history[0].keys() else None
-
-        if current_device and current_device not in known_devices:
+        if device_id not in known_devices:
             score += 15
-            reasons.append(NORMALIZE_REASONS["device"])
+            reasons.append(REASONS["device"])
 
-        if current_location and current_location not in known_locations:
+        if location not in known_locations:
             score += 15
-            reasons.append(NORMALIZE_REASONS["location"])
-
-        # Rule 5: velocity. Because the current transaction is not stored yet,
-        # only previous transactions are counted here.
-        window_start = timestamp - timedelta(minutes=TIME_WINDOW_MINUTES)
-        recent_count = sum(
-            1
-            for row in history
-            if window_start <= _parse_timestamp(row["timestamp"]) <= timestamp
-        )
-        if recent_count >= VELOCITY_LIMIT:
-            score += 25
-            reasons.append(NORMALIZE_REASONS["velocity"])
+            reasons.append(REASONS["location"])
 
     score = min(score, 100)
 
