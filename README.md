@@ -198,6 +198,27 @@ The callback and webhook now update both payment and order state after successfu
 
 The current JSON stores are an MVP persistence layer. Production needs a transactional database and atomic order/payment state transitions.
 
+## Step 25 — Order management queries and pagination ✅
+Expanded the Go order API so orders can now be queried as a collection, not only by a single ID.
+
+Supported queries:
+
+```text
+GET /orders
+GET /orders?user_id=<user_id>
+GET /orders?status=<status>
+GET /orders?user_id=<user_id>&status=<status>
+GET /orders?limit=<1-100>&offset=<0+>
+GET /orders?id=<order_id>
+GET /orders?transaction_id=<transaction_id>
+```
+
+Collection responses return an `orders` array together with the applied `limit` and `offset`.
+
+The order store sorts results newest-first and supports user/status filtering plus offset pagination. Tests now cover filtering, ordering, persistence, and pagination.
+
+The API deliberately does **not** expose a generic public status-mutation endpoint yet. Order status changes currently happen through the controlled checkout/payment workflow. This prevents an arbitrary caller from marking an order `PAID` without verified payment. A dedicated authenticated review/admin workflow will be added after the order model stores the customer information needed to safely resume a reviewed checkout.
+
 # API Quick Reference
 
 | Service | Method | Endpoint | Purpose |
@@ -214,8 +235,11 @@ The current JSON stores are an MVP persistence layer. Production needs a transac
 | Go | `GET` | `/health` | Go service health |
 | Go | `POST` | `/risk-check` | Risk-only decision |
 | Go | `POST` | `/checkout` | Create order + risk gate + payment initialization |
+| Go | `GET` | `/orders` | List orders with filters and pagination |
 | Go | `GET` | `/orders?id=...` | Get order state |
 | Go | `GET` | `/orders?transaction_id=...` | Find order by transaction |
+| Go | `GET` | `/orders?user_id=...` | List a user's orders |
+| Go | `GET` | `/orders?status=...` | List orders by status |
 | Go | `GET` | `/payment/callback` | Server-side payment verification |
 | Go | `POST` | `/webhooks/flutterwave` | Flutterwave webhook receiver |
 
@@ -299,6 +323,7 @@ The repository now contains:
 - Go risk-gating service
 - Persistent Go payment state
 - Persistent Go order state
+- Order listing, filtering, and pagination
 - Flutterwave payment initialization
 - Flutterwave server-side verification
 - Idempotent webhook boundary
