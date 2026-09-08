@@ -30,6 +30,12 @@ Go E-commerce Service
    |
    +--> Flutterwave checkout
    |
+   +--> Persistent payment state
+   |       |
+   |       +--> PENDING
+   |       +--> PAYMENT_INITIALIZED
+   |       +--> PAID / FAILED
+   |
    +--> Flutterwave verification/webhook
    |
    v
@@ -75,6 +81,7 @@ fraudguard/
 │   ├── cmd/server/main.go
 │   ├── internal/fraudguard/client.go
 │   ├── internal/flutterwave/client.go
+│   ├── internal/payments/store.go
 │   └── go.mod
 ├── .github/workflows/test.yml
 ├── Dockerfile
@@ -300,9 +307,7 @@ Added:
 GET /payment/callback
 ```
 
-The callback does not blindly trust the browser redirect. It re-queries Flutterwave's verification endpoint and exposes the verified result.
-
-The verification checks are based on Flutterwave's guidance to verify the transaction status, reference, amount, and currency before giving value. citeturn0search0turn0search2
+The callback does not blindly trust the browser redirect. It re-queries Flutterwave's verification endpoint and checks the stored transaction reference, expected amount, currency, and successful status before marking the payment paid. citeturn0search0turn0search2
 
 ## Step 18 — Flutterwave webhook boundary ✅
 
@@ -312,9 +317,9 @@ Added:
 POST /webhooks/flutterwave
 ```
 
-The endpoint validates the configured webhook secret hash and acknowledges valid events quickly.
+The endpoint validates the configured webhook secret/signature and acknowledges valid events quickly.
 
-Production order fulfillment should process the event idempotently and re-query Flutterwave before giving value. Flutterwave specifically recommends signature validation, quick acknowledgement, idempotent handling, and server-side verification. citeturn1search0turn1search5
+Successful webhook events are re-verified server-side before the payment state can become `PAID`. Duplicate delivery after a payment is already marked `PAID` is acknowledged without processing the payment again. citeturn1search0turn1search5
 
 ## Step 19 — Data analysis with pandas ✅
 
@@ -356,6 +361,35 @@ The service can be started with:
 docker build -t fraudguard .
 docker run -p 8000:8000 fraudguard
 ```
+
+## Step 23 — Persistent payment state and webhook idempotency ✅
+
+Added `go-service/internal/payments/store.go` as the Go service's persistent payment-state layer.
+
+The MVP state machine is now:
+
+```text
+PENDING
+   |
+   v
+PAYMENT_INITIALIZED
+   |
+   +--> PAID
+   |
+   +--> FAILED
+
+Risk decision before payment:
+   REVIEW
+   REJECTED
+```
+
+Payment state is stored in `payments.json` by default and survives a Go service restart. Set `PAYMENT_STORE_PATH` to choose another file location.
+
+Checkout now records `PENDING` before calling Flutterwave, changes to `PAYMENT_INITIALIZED` after a successful payment initialization, and records `FAILED` when initialization fails.
+
+Callbacks and webhooks update the same persistent state. Webhook processing is idempotent for already-paid transactions, and successful events are re-verified with Flutterwave before becoming `PAID`.
+
+This file-backed store is an MVP persistence layer. Production should replace it with a transactional database such as PostgreSQL.
 
 # API Quick Reference
 
@@ -426,6 +460,7 @@ Environment variables:
 ```text
 FRAUDGUARD_URL=http://127.0.0.1:8000
 PORT=8080
+PAYMENT_STORE_PATH=payments.json
 FLW_SECRET_KEY=<your Flutterwave server secret>
 FLW_SECRET_HASH=<your Flutterwave webhook secret hash>
 FLW_REDIRECT_URL=http://localhost:8080/payment/callback
@@ -455,6 +490,14 @@ If FraudGuard returns `REVIEW`, Go returns HTTP `202` and does not initialize pa
 
 If FraudGuard returns `REJECT`, Go returns HTTP `403` and does not initialize payment.
 
+# Payment State
+
+The Go service persists payment state using a small JSON store for the MVP. A payment record contains the internal transaction reference, expected amount, currency, current state, optional Flutterwave transaction ID, and update timestamp.
+
+This is deliberately separate from FraudGuard's transaction database: **Go owns order/payment state; Python owns fraud intelligence and transaction history.**
+
+The important invariant is that a browser redirect or webhook notification is never sufficient by itself to mark a payment paid. The Go service re-queries Flutterwave and compares the returned reference, currency, amount, and status against its stored payment record.
+
 # Integration Documentation
 
 See [`docs/integration.md`](docs/integration.md) for the complete service contract, payment boundary, retry considerations, and production hardening guidance.
@@ -478,6 +521,8 @@ The repository now contains:
 - Flutterwave payment initialization
 - Flutterwave server-side verification
 - Flutterwave webhook endpoint
+- Persistent Go payment state
+- Idempotent webhook payment handling
 - Docker deployment foundation
 
 The system is **development/MVP ready**. It is not yet a production financial system until the production hardening items below are completed and the thresholds are validated against real data.
@@ -487,11 +532,11 @@ The system is **development/MVP ready**. It is not yet a production financial sy
 Before real-money production use:
 
 - Replace SQLite with PostgreSQL or another production database.
+- Replace the Go JSON payment store with PostgreSQL or another transactional production database.
 - Store money as integer minor units (for example, kobo), not floating-point values.
 - Add authentication/authorization between Go and FraudGuard.
 - Use HTTPS/private networking.
 - Add request timeouts, retries, and circuit-breaking.
-- Persist Go orders/payment references in a production database.
 - Make webhook event processing fully persistent and idempotent.
 - Verify Flutterwave amount, currency, and transaction reference against the stored order before fulfillment.
 - Add structured logging and monitoring.
