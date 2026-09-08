@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -27,7 +28,7 @@ def normalized_timestamp(transaction: TransactionCreate) -> str:
     timestamp = transaction.timestamp
     if timestamp.tzinfo is None:
         return timestamp.isoformat()
-    return timestamp.astimezone().isoformat()
+    return timestamp.astimezone(timezone.utc).isoformat()
 
 
 def row_to_response(row, duplicate: bool = False) -> TransactionResponse:
