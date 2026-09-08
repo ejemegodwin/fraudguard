@@ -23,6 +23,9 @@ app = FastAPI(title="FraudGuard", version="1.0.0")
 
 initialize_database()
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+DASHBOARD_PATH = BASE_DIR / "static" / "dashboard.html"
+
 
 def normalized_timestamp(transaction: TransactionCreate) -> str:
     timestamp = transaction.timestamp
@@ -88,7 +91,7 @@ def health():
 
 @app.get("/dashboard")
 def dashboard():
-    return FileResponse(Path("static/dashboard.html"))
+    return FileResponse(DASHBOARD_PATH)
 
 
 @app.post("/transactions", response_model=TransactionResponse)
