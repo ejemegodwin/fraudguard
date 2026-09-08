@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"fraudguard-go/internal/flutterwave"
@@ -103,11 +104,29 @@ func main() {
 
 	http.HandleFunc("/orders", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"}); return }
-		orderID, transactionID := r.URL.Query().Get("id"), r.URL.Query().Get("transaction_id")
-		var order orders.Order; var ok bool
-		if orderID != "" { order, ok = orderStore.Get(orderID) } else if transactionID != "" { order, ok = orderStore.GetByTransaction(transactionID) } else { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id or transaction_id is required"}); return }
-		if !ok { writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"}); return }
-		writeJSON(w, http.StatusOK, order)
+		query := r.URL.Query()
+		orderID, transactionID := query.Get("id"), query.Get("transaction_id")
+		if orderID != "" && transactionID != "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "use either id or transaction_id, not both"}); return }
+
+		if orderID != "" {
+			order, ok := orderStore.Get(orderID)
+			if !ok { writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"}); return }
+			writeJSON(w, http.StatusOK, order)
+			return
+		}
+		if transactionID != "" {
+			order, ok := orderStore.GetByTransaction(transactionID)
+			if !ok { writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"}); return }
+			writeJSON(w, http.StatusOK, order)
+			return
+		}
+
+		limit, offset, err := pagination(query.Get("limit"), query.Get("offset"))
+		if err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()}); return }
+		status := query.Get("status")
+		userID := query.Get("user_id")
+		result := orderStore.List(userID, status, limit, offset)
+		writeJSON(w, http.StatusOK, map[string]any{"orders": result, "limit": limit, "offset": offset})
 	})
 
 	http.HandleFunc("/payment/callback", func(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +176,14 @@ func decodeRiskRequest(w http.ResponseWriter, r *http.Request) (RiskCheckRequest
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return RiskCheckRequest{}, false }
 	if input.UserID == "" || input.Amount <= 0 || input.Location == "" || input.DeviceID == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user_id, amount, location and device_id are required"}); return RiskCheckRequest{}, false }
 	return input, true
+}
+
+func pagination(rawLimit, rawOffset string) (int, int, error) {
+	limit, offset := 50, 0
+	var err error
+	if rawLimit != "" { limit, err = strconv.Atoi(rawLimit); if err != nil || limit < 1 || limit > 100 { return 0, 0, fmt.Errorf("limit must be between 1 and 100") } }
+	if rawOffset != "" { offset, err = strconv.Atoi(rawOffset); if err != nil || offset < 0 { return 0, 0, fmt.Errorf("offset must be zero or greater") } }
+	return limit, offset, nil
 }
 
 func newTransaction(input RiskCheckRequest) fraudguard.Transaction { return fraudguard.Transaction{TransactionID: fmt.Sprintf("txn_%d", time.Now().UnixNano()), UserID: input.UserID, Amount: input.Amount, Timestamp: time.Now().UTC(), Location: input.Location, DeviceID: input.DeviceID} }
