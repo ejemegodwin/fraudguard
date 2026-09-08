@@ -1,8 +1,6 @@
-import hashlib
-import hmac
 import json
-import os
 import sqlite3
+import os
 from datetime import timezone
 from pathlib import Path
 
@@ -85,6 +83,7 @@ def require_service_auth(request: Request) -> None:
         return
     supplied = request.headers.get("X-API-Key", "").encode()
     expected = FRAUDGUARD_API_KEY.encode()
+    import hmac
     if not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="invalid API credentials")
 
@@ -119,10 +118,7 @@ def create_transaction(transaction: TransactionCreate, request: Request):
     if existing:
         if same_transaction_data(existing, transaction):
             return row_to_response(existing, duplicate=True)
-        raise HTTPException(
-            status_code=409,
-            detail="transaction_id already exists with different data",
-        )
+        raise HTTPException(status_code=409, detail="transaction_id already exists with different data")
 
     history_rows = get_user_transactions(transaction.user_id)
     history = [transaction_from_history(row) for row in history_rows]
@@ -145,28 +141,16 @@ def create_transaction(transaction: TransactionCreate, request: Request):
                     decision, reasons
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    transaction.transaction_id,
-                    transaction.user_id,
-                    transaction.amount,
-                    stored_timestamp,
-                    transaction.location,
-                    transaction.device_id,
-                    score,
-                    risk_level,
-                    decision,
-                    json.dumps(reasons),
-                ),
+                (transaction.transaction_id, transaction.user_id, transaction.amount,
+                 stored_timestamp, transaction.location, transaction.device_id,
+                 score, risk_level, decision, json.dumps(reasons)),
             )
             connection.commit()
     except sqlite3.IntegrityError:
         existing = get_transaction(transaction.transaction_id)
         if existing and same_transaction_data(existing, transaction):
             return row_to_response(existing, duplicate=True)
-        raise HTTPException(
-            status_code=409,
-            detail="transaction_id already exists with different data",
-        )
+        raise HTTPException(status_code=409, detail="transaction_id already exists with different data")
 
     created = get_transaction(transaction.transaction_id)
     if created is None:
@@ -175,11 +159,7 @@ def create_transaction(transaction: TransactionCreate, request: Request):
 
 
 @app.get("/transactions", response_model=list[TransactionResponse])
-def get_transactions(
-    user_id: str | None = None,
-    limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-):
+def get_transactions(user_id: str | None = None, limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0)):
     rows = list_transactions(user_id=user_id, limit=limit, offset=offset)
     return [row_to_response(row) for row in rows]
 
@@ -196,26 +176,16 @@ def get_transaction_by_id(transaction_id: str):
 def stats():
     data = get_stats()
     data["high_risk_transactions"] = [
-        {
-            "transaction_id": row["transaction_id"],
-            "user_id": row["user_id"],
-            "amount": row["amount"],
-            "risk_score": row["risk_score"],
-            "risk_level": row["risk_level"],
-            "decision": row["decision"],
-            "reasons": json.loads(row["reasons"]),
-            "timestamp": row["timestamp"],
-        }
+        {"transaction_id": row["transaction_id"], "user_id": row["user_id"], "amount": row["amount"],
+         "risk_score": row["risk_score"], "risk_level": row["risk_level"], "decision": row["decision"],
+         "reasons": json.loads(row["reasons"]), "timestamp": row["timestamp"]}
         for row in data["high_risk_transactions"]
     ]
     return data
 
 
 @app.get("/analytics")
-def analytics(
-    user_id: str | None = None,
-    limit: int = Query(default=5000, ge=1, le=10000),
-):
+def analytics(user_id: str | None = None, limit: int = Query(default=5000, ge=1, le=10000)):
     rows = list_transactions(user_id=user_id, limit=limit, offset=0)
     summary = summarize_transactions([row_to_dict(row) for row in rows])
     summary["user_id"] = user_id
@@ -223,15 +193,8 @@ def analytics(
 
 
 @app.get("/analytics/anomalies")
-def anomaly_analysis(
-    user_id: str | None = None,
-    limit: int = Query(default=5000, ge=1, le=10000),
-):
+def anomaly_analysis(user_id: str | None = None, limit: int = Query(default=5000, ge=1, le=10000)):
     rows = list_transactions(user_id=user_id, limit=limit, offset=0)
     anomalies = detect_anomalies([row_to_dict(row) for row in rows])
-    return {
-        "user_id": user_id,
-        "minimum_training_rows": 20,
-        "anomalies": anomalies,
-        "model_used": "IsolationForest" if len(rows) >= 20 else None,
-    }
+    return {"user_id": user_id, "minimum_training_rows": 20, "anomalies": anomalies,
+            "model_used": "IsolationForest" if len(rows) >= 20 else None}
