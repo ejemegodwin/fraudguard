@@ -34,7 +34,9 @@ type PaymentRequest struct {
 	Currency    string   `json:"currency"`
 	RedirectURL string   `json:"redirect_url"`
 	Customer    Customer `json:"customer"`
-	CustomTitle string   `json:"customizations_title,omitempty"`
+	Customizations struct {
+		Title string `json:"title,omitempty"`
+	} `json:"customizations,omitempty"`
 }
 
 type PaymentResponse struct {
@@ -46,9 +48,9 @@ type PaymentResponse struct {
 }
 
 type VerifyResponse struct {
-	Status string `json:"status"`
+	Status  string `json:"status"`
 	Message string `json:"message"`
-	Data   struct {
+	Data    struct {
 		ID            int     `json:"id"`
 		TxRef         string  `json:"tx_ref"`
 		Amount        float64 `json:"amount"`
@@ -117,6 +119,8 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any, r
 	return nil
 }
 
+// VerifyWebhookSignature validates the HMAC-SHA256 webhook signature used by
+// newer Flutterwave webhook configurations.
 func VerifyWebhookSignature(rawBody []byte, signature, secretHash string) bool {
 	if signature == "" || secretHash == "" {
 		return false
@@ -127,6 +131,8 @@ func VerifyWebhookSignature(rawBody []byte, signature, secretHash string) bool {
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(signature)) == 1
 }
 
+// VerifyWebhookSecretHash validates the verif-hash header used by Flutterwave
+// v3 webhook configurations.
 func VerifyWebhookSecretHash(signature, secretHash string) bool {
 	if signature == "" || secretHash == "" {
 		return false
