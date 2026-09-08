@@ -1,7 +1,9 @@
 import json
 import sqlite3
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from app.database import (
     get_connection,
@@ -19,6 +21,13 @@ from app.services.risk_engine import calculate_risk_score
 app = FastAPI(title="FraudGuard", version="1.0.0")
 
 initialize_database()
+
+
+def normalized_timestamp(transaction: TransactionCreate) -> str:
+    timestamp = transaction.timestamp
+    if timestamp.tzinfo is None:
+        return timestamp.isoformat()
+    return timestamp.astimezone().isoformat()
 
 
 def row_to_response(row, duplicate: bool = False) -> TransactionResponse:
@@ -42,7 +51,7 @@ def same_transaction_data(row, transaction: TransactionCreate) -> bool:
         [
             row["user_id"] == transaction.user_id,
             row["amount"] == transaction.amount,
-            row["timestamp"] == transaction.timestamp.isoformat(),
+            row["timestamp"] == normalized_timestamp(transaction),
             row["location"] == transaction.location,
             row["device_id"] == transaction.device_id,
         ]
@@ -76,6 +85,11 @@ def health():
     return {"status": "healthy"}
 
 
+@app.get("/dashboard")
+def dashboard():
+    return FileResponse(Path("static/dashboard.html"))
+
+
 @app.post("/transactions", response_model=TransactionResponse)
 def create_transaction(transaction: TransactionCreate):
     existing = get_transaction(transaction.transaction_id)
@@ -100,6 +114,8 @@ def create_transaction(transaction: TransactionCreate):
         historical_transactions=history,
     )
 
+    stored_timestamp = normalized_timestamp(transaction)
+
     try:
         with get_connection() as connection:
             connection.execute(
@@ -114,7 +130,7 @@ def create_transaction(transaction: TransactionCreate):
                     transaction.transaction_id,
                     transaction.user_id,
                     transaction.amount,
-                    transaction.timestamp.isoformat(),
+                    stored_timestamp,
                     transaction.location,
                     transaction.device_id,
                     score,
