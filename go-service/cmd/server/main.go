@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"fraudguard-go/internal/flutterwave"
@@ -28,6 +29,16 @@ type CheckoutRequest struct {
 	PhoneNumber string `json:"phone_number"`
 	Currency    string `json:"currency"`
 }
+
+type pendingPayment struct {
+	Amount   float64
+	Currency string
+}
+
+var pendingPayments = struct {
+	sync.RWMutex
+	items map[string]pendingPayment
+}{items: make(map[string]pendingPayment)}
 
 func main() {
 	fraudGuardURL := getenv("FRAUDGUARD_URL", "http://127.0.0.1:8000")
@@ -140,6 +151,10 @@ func main() {
 			return
 		}
 
+		pendingPayments.Lock()
+		pendingPayments.items[transaction.TransactionID] = pendingPayment{Amount: transaction.Amount, Currency: currency}
+		pendingPayments.Unlock()
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"transaction_id": transaction.TransactionID,
 			"decision":       risk.Decision,
@@ -149,16 +164,12 @@ func main() {
 	})
 
 	http.HandleFunc("/payment/callback", func(w http.ResponseWriter, r *http.Request) {
-		transactionID := r.URL.Query().Get("transaction_id")
-		txRef := r.URL.Query().Get("tx_ref")
-		status := r.URL.Query().Get("status")
+		internalRef := r.URL.Query().Get("tx_ref")
+		flutterwaveID := r.URL.Query().Get("transaction_id")
+		callbackStatus := r.URL.Query().Get("status")
 
-		if transactionID == "" || txRef == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "transaction_id and tx_ref are required"})
-			return
-		}
-		if txRef != transactionID {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "transaction reference mismatch"})
+		if internalRef == "" || flutterwaveID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tx_ref and transaction_id are required"})
 			return
 		}
 		if flwSecretKey == "" {
@@ -166,15 +177,34 @@ func main() {
 			return
 		}
 
-		verification, err := flwClient.VerifyTransaction(r.Context(), transactionID)
+		pendingPayments.RLock()
+		expected, exists := pendingPayments.items[internalRef]
+		pendingPayments.RUnlock()
+		if !exists {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "pending transaction not found"})
+			return
+		}
+
+		verification, err := flwClient.VerifyTransaction(r.Context(), flutterwaveID)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "payment verification failed"})
 			return
 		}
 
+		verified := verification.Data.Status == "successful" &&
+			verification.Data.TxRef == internalRef &&
+			verification.Data.Currency == expected.Currency &&
+			verification.Data.ChargedAmount >= expected.Amount
+
+		if verified {
+			pendingPayments.Lock()
+			delete(pendingPayments.items, internalRef)
+			pendingPayments.Unlock()
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
-			"callback_status": status,
-			"verified":        verification.Data.Status == "successful",
+			"callback_status": callbackStatus,
+			"verified":        verified,
 			"transaction":     verification.Data,
 		})
 	})
@@ -197,8 +227,13 @@ func main() {
 			return
 		}
 
-		signature := r.Header.Get("verif-hash")
-		if !flutterwave.VerifyWebhookSecretHash(signature, secretHash) {
+		signature := r.Header.Get("flutterwave-signature")
+		valid := flutterwave.VerifyWebhookSignature(rawBody, signature, secretHash)
+		if !valid {
+			signature = r.Header.Get("verif-hash")
+			valid = flutterwave.VerifyWebhookSecretHash(signature, secretHash)
+		}
+		if !valid {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid webhook signature"})
 			return
 		}
@@ -219,8 +254,8 @@ func main() {
 			return
 		}
 
-		// Acknowledge quickly. Production order fulfillment should enqueue this
-		// event, then re-query Flutterwave and verify amount/currency/reference.
+		// Acknowledge quickly. Production fulfillment should enqueue this event,
+		// deduplicate it, then re-query Flutterwave and verify amount/currency/ref.
 		log.Printf("Flutterwave webhook received: id=%s type=%s tx_ref=%s status=%s", event.ID, event.Type, event.Data.TxRef, event.Data.Status)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "received"})
 	})
