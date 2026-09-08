@@ -8,7 +8,7 @@ Customer
    v
 Go E-commerce Service
    |
-   +--> FraudGuard
+   +--> FraudGuard (authenticated service call)
    |      |
    |      +--> ALLOW / REVIEW / REJECT
    |
@@ -35,6 +35,7 @@ FraudGuard owns fraud intelligence. Go owns the e-commerce request path, order l
 ```http
 POST /transactions
 Content-Type: application/json
+X-API-Key: <service key>
 ```
 
 ```json
@@ -49,6 +50,8 @@ Content-Type: application/json
 ```
 
 The client does not provide a risk score. FraudGuard calculates it from the transaction and stored history.
+
+If `FRAUDGUARD_API_KEY` is configured, `/transactions` requires the matching `X-API-Key`. Leaving the variable unset preserves local development compatibility.
 
 ### Decision response
 
@@ -127,6 +130,12 @@ The Go order store enforces these transitions. Terminal `PAID`, `FAILED`, and `R
 Start FraudGuard first:
 
 ```bash
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+For local development with reload:
+
+```bash
 uvicorn app.main:app --reload
 ```
 
@@ -144,10 +153,26 @@ FraudGuard: http://127.0.0.1:8000
 Go service: http://127.0.0.1:8080
 ```
 
-## 8. Go environment variables
+Readiness endpoints:
+
+```text
+FraudGuard: GET /ready
+Go service: GET /health
+```
+
+## 8. Environment variables
+
+FraudGuard:
+
+```text
+FRAUDGUARD_API_KEY=<long random service key>
+```
+
+Go:
 
 ```text
 FRAUDGUARD_URL=http://127.0.0.1:8000
+FRAUDGUARD_API_KEY=<same service key>
 PORT=8080
 PAYMENT_STORE_PATH=payments.json
 ORDER_STORE_PATH=orders.json
@@ -158,7 +183,7 @@ FLW_REDIRECT_URL=http://localhost:8080/payment/callback
 FLW_BASE_URL=https://api.flutterwave.com/v3
 ```
 
-Never commit real credentials to GitHub.
+Never commit real credentials to GitHub. In production, inject secrets through a managed secret store or deployment secret mechanism.
 
 ## 9. Flutterwave payment initialization
 
@@ -191,6 +216,8 @@ POST /webhooks/flutterwave
 
 The endpoint validates the configured webhook secret/signature, ignores unknown transactions safely, treats an already-paid transaction as idempotently processed, and re-verifies successful payment events server-side before changing state.
 
+For production, persist provider event IDs and make event processing transactional so replay protection survives process restarts and multiple service instances.
+
 ## 12. Order queries
 
 ```http
@@ -208,20 +235,21 @@ Collection results are newest-first and support `limit` from 1–100 and non-neg
 
 - Keep Flutterwave secrets on the Go server.
 - Never expose `FLW_SECRET_KEY` to a browser or Flutter client.
+- Authenticate Go-to-FraudGuard calls with `FRAUDGUARD_API_KEY` outside local development.
 - Protect admin review routes with a strong secret and private network access in production.
 - Use HTTPS in production.
 - Do not trust callback query parameters without server-side verification.
 - Never trust a client-provided `risk_score`.
-- Use constant-time comparison for webhook/admin secrets.
+- Use constant-time comparison for service/admin/webhook secrets.
 - Keep request bodies bounded.
+- Run the FraudGuard container as a non-root user.
 
 ## 14. Production requirements
 
-The repository is an MVP implementation. Before real-money production use:
+The repository is an MVP implementation with an initial hardening layer. Before real-money production use:
 
 - Replace JSON order/payment persistence with PostgreSQL or another transactional database.
 - Store monetary values as integer minor units such as kobo.
-- Add authenticated service-to-service communication between Go and FraudGuard.
 - Persist webhook event IDs and use transactional idempotency.
 - Enforce order/payment transitions atomically in the database.
 - Add structured logs, metrics, tracing, rate limiting, retries, and circuit breakers.
@@ -230,3 +258,5 @@ The repository is an MVP implementation. Before real-money production use:
 - Add model/data drift monitoring.
 - Fulfill inventory only after verified payment and a valid terminal order state.
 - Store secrets in a managed secret store.
+- Add audit logging for risk decisions, admin actions, and payment state changes.
+- Add deployment-level HTTPS, network policies, backups, and disaster recovery.
