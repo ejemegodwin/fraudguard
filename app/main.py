@@ -90,7 +90,7 @@ def require_service_auth(request: Request) -> None:
 
 @app.get("/")
 def root():
-    return {"service": "FraudGuard", "status": "running", "version": app.version}
+    return FileResponse(DASHBOARD_PATH)
 
 
 @app.get("/health")
