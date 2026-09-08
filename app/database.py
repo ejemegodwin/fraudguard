@@ -7,8 +7,11 @@ DATABASE_PATH = Path("fraudguard.db")
 
 
 def get_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(DATABASE_PATH)
+    connection = sqlite3.connect(DATABASE_PATH, timeout=10)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout = 10000")
+    connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA synchronous = NORMAL")
     return connection
 
 
@@ -35,6 +38,15 @@ def initialize_database() -> None:
             "ON transactions(user_id, timestamp)"
         )
         connection.commit()
+
+
+def check_database() -> bool:
+    try:
+        with get_connection() as connection:
+            connection.execute("SELECT 1").fetchone()
+        return True
+    except sqlite3.Error:
+        return False
 
 
 def get_transaction(transaction_id: str) -> sqlite3.Row | None:
