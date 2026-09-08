@@ -1,3 +1,3 @@
-module fraudguard-go
+module go-service
 
-go 1.25
+go 1.22.2
