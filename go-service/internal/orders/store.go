@@ -15,6 +15,7 @@ const (
 	StatusPending   = "PENDING"
 	StatusReview    = "REVIEW"
 	StatusRejected  = "REJECTED"
+	StatusApproved  = "APPROVED"
 	StatusPayment   = "PAYMENT_INITIALIZED"
 	StatusPaid      = "PAID"
 	StatusFailed    = "FAILED"
@@ -26,6 +27,13 @@ type Order struct {
 	UserID        string    `json:"user_id"`
 	Amount        float64   `json:"amount"`
 	Currency      string    `json:"currency"`
+	Email         string    `json:"email,omitempty"`
+	Name          string    `json:"name,omitempty"`
+	PhoneNumber   string    `json:"phone_number,omitempty"`
+	RiskScore     int       `json:"risk_score,omitempty"`
+	RiskLevel     string    `json:"risk_level,omitempty"`
+	RiskDecision  string    `json:"risk_decision,omitempty"`
+	RiskReasons   []string  `json:"risk_reasons,omitempty"`
 	Status        string    `json:"status"`
 	PaymentStatus string    `json:"payment_status"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -39,140 +47,93 @@ type Store struct {
 }
 
 func NewStore(path string) (*Store, error) {
-	if path == "" {
-		path = "orders.json"
-	}
+	if path == "" { path = "orders.json" }
 	s := &Store{path: path, orders: make(map[string]Order)}
 	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read order store: %w", err)
-	}
-	if len(data) == 0 {
-		return s, nil
-	}
-	if err := json.Unmarshal(data, &s.orders); err != nil {
-		return nil, fmt.Errorf("decode order store: %w", err)
-	}
+	if errors.Is(err, os.ErrNotExist) { return s, nil }
+	if err != nil { return nil, fmt.Errorf("read order store: %w", err) }
+	if len(data) == 0 { return s, nil }
+	if err := json.Unmarshal(data, &s.orders); err != nil { return nil, fmt.Errorf("decode order store: %w", err) }
 	return s, nil
 }
 
 func (s *Store) Create(order Order) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.orders[order.OrderID]; exists {
-		return fmt.Errorf("order %s already exists", order.OrderID)
-	}
-	now := time.Now().UTC()
-	order.CreatedAt = now
-	order.UpdatedAt = now
+	s.mu.Lock(); defer s.mu.Unlock()
+	if order.OrderID == "" { return errors.New("order ID is required") }
+	if _, exists := s.orders[order.OrderID]; exists { return fmt.Errorf("order %s already exists", order.OrderID) }
+	now := time.Now().UTC(); order.CreatedAt = now; order.UpdatedAt = now
+	if order.Status == "" { order.Status = StatusPending }
+	if order.PaymentStatus == "" { order.PaymentStatus = StatusPending }
 	s.orders[order.OrderID] = order
 	return s.persistLocked()
 }
 
-func (s *Store) Get(orderID string) (Order, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	order, ok := s.orders[orderID]
-	return order, ok
-}
+func (s *Store) Get(orderID string) (Order, bool) { s.mu.RLock(); defer s.mu.RUnlock(); order, ok := s.orders[orderID]; return order, ok }
 
 func (s *Store) GetByTransaction(transactionID string) (Order, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, order := range s.orders {
-		if order.TransactionID == transactionID {
-			return order, true
-		}
-	}
+	s.mu.RLock(); defer s.mu.RUnlock()
+	for _, order := range s.orders { if order.TransactionID == transactionID { return order, true } }
 	return Order{}, false
 }
 
-// List returns orders filtered by user and/or status, newest first.
-// limit <= 0 means no explicit limit; offset < 0 is treated as zero.
 func (s *Store) List(userID, status string, limit, offset int) []Order {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if offset < 0 {
-		offset = 0
-	}
-
+	s.mu.RLock(); defer s.mu.RUnlock()
+	if offset < 0 { offset = 0 }
 	result := make([]Order, 0, len(s.orders))
 	for _, order := range s.orders {
-		if userID != "" && order.UserID != userID {
-			continue
-		}
-		if status != "" && order.Status != status {
-			continue
-		}
+		if userID != "" && order.UserID != userID { continue }
+		if status != "" && order.Status != status { continue }
 		result = append(result, order)
 	}
-
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].CreatedAt.After(result[j].CreatedAt)
-	})
-
-	if offset >= len(result) {
-		return []Order{}
-	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
+	if offset >= len(result) { return []Order{} }
 	result = result[offset:]
-	if limit > 0 && limit < len(result) {
-		result = result[:limit]
-	}
+	if limit > 0 && limit < len(result) { result = result[:limit] }
 	return result
 }
 
+func validStatus(status string) bool {
+	switch status { case StatusPending, StatusReview, StatusRejected, StatusApproved, StatusPayment, StatusPaid, StatusFailed: return true }
+	return false
+}
+
+func canTransition(from, to string) bool {
+	if from == to { return true }
+	switch from {
+	case StatusPending: return to == StatusPayment || to == StatusFailed || to == StatusRejected
+	case StatusReview: return to == StatusApproved || to == StatusRejected
+	case StatusApproved: return to == StatusPayment || to == StatusRejected || to == StatusFailed
+	case StatusPayment: return to == StatusPaid || to == StatusFailed
+	case StatusPaid, StatusRejected, StatusFailed: return false
+	default: return false
+	}
+}
+
 func (s *Store) UpdateStatus(orderID, status string) (Order, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	order, ok := s.orders[orderID]
-	if !ok {
-		return Order{}, fmt.Errorf("order %s not found", orderID)
-	}
-	order.Status = status
-	order.UpdatedAt = time.Now().UTC()
-	s.orders[orderID] = order
-	if err := s.persistLocked(); err != nil {
-		return Order{}, err
-	}
+	if !validStatus(status) { return Order{}, fmt.Errorf("invalid order status %q", status) }
+	s.mu.Lock(); defer s.mu.Unlock()
+	order, ok := s.orders[orderID]; if !ok { return Order{}, fmt.Errorf("order %s not found", orderID) }
+	if !canTransition(order.Status, status) { return Order{}, fmt.Errorf("invalid order transition %s -> %s", order.Status, status) }
+	order.Status = status; order.UpdatedAt = time.Now().UTC(); s.orders[orderID] = order
+	if err := s.persistLocked(); err != nil { return Order{}, err }
 	return order, nil
 }
 
 func (s *Store) UpdatePaymentStatus(orderID, status string) (Order, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	order, ok := s.orders[orderID]
-	if !ok {
-		return Order{}, fmt.Errorf("order %s not found", orderID)
-	}
-	order.PaymentStatus = status
-	order.UpdatedAt = time.Now().UTC()
-	s.orders[orderID] = order
-	if err := s.persistLocked(); err != nil {
-		return Order{}, err
-	}
+	valid := map[string]bool{StatusPending:true, StatusReview:true, StatusRejected:true, StatusPayment:true, StatusPaid:true, StatusFailed:true}
+	if !valid[status] { return Order{}, fmt.Errorf("invalid payment status %q", status) }
+	s.mu.Lock(); defer s.mu.Unlock()
+	order, ok := s.orders[orderID]; if !ok { return Order{}, fmt.Errorf("order %s not found", orderID) }
+	order.PaymentStatus = status; order.UpdatedAt = time.Now().UTC(); s.orders[orderID] = order
+	if err := s.persistLocked(); err != nil { return Order{}, err }
 	return order, nil
 }
 
 func (s *Store) persistLocked() error {
-	if dir := filepath.Dir(s.path); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create order store directory: %w", err)
-		}
-	}
-	data, err := json.MarshalIndent(s.orders, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode order store: %w", err)
-	}
+	if dir := filepath.Dir(s.path); dir != "." { if err := os.MkdirAll(dir, 0o755); err != nil { return fmt.Errorf("create order store directory: %w", err) } }
+	data, err := json.MarshalIndent(s.orders, "", "  "); if err != nil { return fmt.Errorf("encode order store: %w", err) }
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("write order store: %w", err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		return fmt.Errorf("replace order store: %w", err)
-	}
+	if err := os.WriteFile(tmp, data, 0o600); err != nil { return fmt.Errorf("write order store: %w", err) }
+	if err := os.Rename(tmp, s.path); err != nil { return fmt.Errorf("replace order store: %w", err) }
 	return nil
 }
