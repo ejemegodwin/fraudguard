@@ -57,7 +57,7 @@ def calculate_risk_score(
         if window_start <= _parse_timestamp(row["timestamp"]) <= timestamp
     )
     if recent_count >= VELOCITY_LIMIT:
-        score += 25
+        score += 30
         reasons.append(REASONS["velocity"])
 
     # Rules based on behavioral history require a minimum number of records.
