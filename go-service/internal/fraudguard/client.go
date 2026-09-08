@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -29,12 +31,14 @@ type RiskResponse struct {
 
 type Client struct {
 	BaseURL    string
+	APIKey     string
 	HTTPClient *http.Client
 }
 
 func NewClient(baseURL string) *Client {
 	return &Client{
-		BaseURL: baseURL,
+		BaseURL: strings.TrimRight(baseURL, "/"),
+		APIKey: os.Getenv("FRAUDGUARD_API_KEY"),
 		HTTPClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -47,17 +51,15 @@ func (c *Client) CheckTransaction(ctx context.Context, transaction Transaction) 
 		return RiskResponse{}, fmt.Errorf("marshal fraud request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		c.BaseURL+"/transactions",
-		bytes.NewReader(body),
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/transactions", bytes.NewReader(body))
 	if err != nil {
 		return RiskResponse{}, fmt.Errorf("create fraud request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if c.APIKey != "" {
+		req.Header.Set("X-API-Key", c.APIKey)
+	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
