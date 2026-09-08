@@ -20,7 +20,7 @@ Customer
    v
 Go E-commerce Service
    |
-   +--> FraudGuard risk check
+   +--> FraudGuard risk check (X-API-Key)
    |       |
    |       +--> ALLOW / REVIEW / REJECT
    |
@@ -41,7 +41,7 @@ Go E-commerce Service
 
 FraudGuard (Python/FastAPI)
    |
-   +--> SQLite transaction history
+   +--> SQLite transaction history (WAL)
    +--> Rules Engine
    +--> Explainable Risk Score
    +--> pandas analytics
@@ -114,7 +114,7 @@ Implemented transaction listing, user filtering, individual lookup, statistics, 
 Added pytest coverage and GitHub Actions for Python and Go tests.
 
 ## Step 14 — Go FraudGuard client ✅
-Added a Go HTTP client with contexts, timeouts, JSON decoding, and non-2xx error handling.
+Added a Go HTTP client with contexts, timeouts, JSON decoding, non-2xx error handling, and optional `X-API-Key` authentication.
 
 ## Step 15 — Go risk-gating service ✅
 Added `/risk-check`. Go creates the transaction ID and enforces `REJECT → 403`, `REVIEW → 202`, and `ALLOW → payment flow`.
@@ -159,8 +159,8 @@ Added persistent Go order state linked to each FraudGuard transaction. Orders re
 ## Step 25 — Order management queries and pagination ✅
 Added `GET /orders` filtering by user/status plus `limit`/`offset` pagination, while retaining direct lookup by order ID or transaction ID.
 
-## Step 26 — Controlled human fraud-review workflow and final hardening pass ✅
-Completed the full MVP pass in one integrated implementation instead of continuing feature-by-feature.
+## Step 26 — Controlled human fraud-review workflow and final MVP hardening ✅
+Completed the planned MVP in one integrated implementation.
 
 Implemented:
 
@@ -180,12 +180,27 @@ Implemented:
 - Kept callback/webhook payment verification server-side and idempotent.
 - Updated integration documentation to describe the completed workflow.
 
+## Step 27 — Production security and reliability hardening ✅
+Added the first production-hardening layer:
+
+- Added optional authenticated Go → FraudGuard service calls using `FRAUDGUARD_API_KEY` and `X-API-Key`.
+- Added constant-time comparison for FraudGuard service authentication.
+- Added FraudGuard `/ready` readiness endpoint with a real SQLite connectivity check.
+- Added SQLite WAL mode, busy timeout, and normal synchronous mode for better concurrent reliability.
+- Normalized naive transaction timestamps as UTC rather than leaving them ambiguous.
+- Hardened the FraudGuard Docker image with a non-root runtime user.
+- Added a Docker healthcheck against `/ready`.
+- Updated integration/security documentation and environment-variable reference.
+
+This hardening layer improves the MVP deployment boundary but does **not** make the system production-ready for real-money financial use by itself.
+
 # API Quick Reference
 
 | Service | Method | Endpoint | Purpose |
 |---|---|---|---|
 | FraudGuard | `GET` | `/` | Service information |
-| FraudGuard | `GET` | `/health` | Health check |
+| FraudGuard | `GET` | `/health` | Liveness check |
+| FraudGuard | `GET` | `/ready` | Database readiness check |
 | FraudGuard | `GET` | `/dashboard` | Monitoring dashboard |
 | FraudGuard | `POST` | `/transactions` | Score and store a transaction |
 | FraudGuard | `GET` | `/transactions` | List transactions |
@@ -217,6 +232,12 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+Optional service authentication:
+
+```bash
+export FRAUDGUARD_API_KEY="replace-with-a-long-random-secret"
+```
+
 Then open `http://127.0.0.1:8000/docs` or `http://127.0.0.1:8000/dashboard`.
 
 Run tests:
@@ -237,6 +258,7 @@ Environment variables:
 
 ```text
 FRAUDGUARD_URL=http://127.0.0.1:8000
+FRAUDGUARD_API_KEY=<same service key used by FraudGuard>
 PORT=8080
 PAYMENT_STORE_PATH=payments.json
 ORDER_STORE_PATH=orders.json
@@ -272,7 +294,7 @@ If FraudGuard returns `REJECT`, Go creates an order in `REJECTED` and returns HT
 
 # MVP Status
 
-The integrated MVP is now **feature-complete for the planned development scope**:
+The integrated MVP is **feature-complete for the planned development scope**:
 
 - Python fraud microservice
 - Explainable fraud rules
@@ -295,6 +317,9 @@ The integrated MVP is now **feature-complete for the planned development scope**
 - Flutterwave server-side verification
 - Idempotent webhook boundary
 - Docker deployment foundation
+- Service-to-service authentication boundary
+- Readiness/health checks
+- SQLite concurrency hardening
 - Integration and architecture documentation
 
 The system is **development/MVP ready**, not a production financial platform yet.
@@ -305,20 +330,22 @@ Before real-money production use:
 
 - Replace JSON order/payment persistence with PostgreSQL or another transactional database.
 - Store money as integer minor units such as kobo, not floating-point values.
-- Add authenticated service-to-service communication between Go and FraudGuard.
-- Use HTTPS/private networking.
 - Persist webhook event IDs and make webhook processing transactional and idempotent.
 - Enforce order/payment transitions atomically in the database.
 - Add structured logging, metrics, tracing, rate limiting, retries, and circuit breakers.
 - Replace the single admin API key with an audited identity/role system.
-- Add inventory/fulfillment only after verified payment and valid terminal order state.
-- Add model/data drift monitoring.
+- Add deployment-level HTTPS and private service networking.
 - Tune fraud thresholds using representative governed data.
-- Store secrets in a secret manager.
+- Add model/data drift monitoring.
+- Fulfill inventory only after verified payment and valid terminal order state.
+- Store secrets in a managed secret store.
 - Add audit logging for risk decisions, admin actions, and payment state changes.
+- Add database backups, migrations, disaster recovery, and multi-instance deployment strategy.
+- Add end-to-end integration tests using fake FraudGuard and Flutterwave servers.
+- Add security testing and an independent production review before handling real customer funds.
 
 # Development Philosophy
 
 FraudGuard starts with explainable rules and then adds statistical and machine-learning analysis. The Go service owns the fast e-commerce path, order lifecycle, review workflow, and payment boundary, while Python owns fraud intelligence and historical analysis.
 
-The planned MVP scope is complete. Future work should focus on production infrastructure, database transactions, authentication, observability, and tuning—not on extending the core proof-of-concept architecture.
+The planned MVP scope is complete. Future work should focus on production infrastructure, database transactions, authentication/identity, observability, security review, and model/rule governance—not on extending the core proof-of-concept architecture.
