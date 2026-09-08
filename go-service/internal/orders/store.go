@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -87,6 +88,41 @@ func (s *Store) GetByTransaction(transactionID string) (Order, bool) {
 		}
 	}
 	return Order{}, false
+}
+
+// List returns orders filtered by user and/or status, newest first.
+// limit <= 0 means no explicit limit; offset < 0 is treated as zero.
+func (s *Store) List(userID, status string, limit, offset int) []Order {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if offset < 0 {
+		offset = 0
+	}
+
+	result := make([]Order, 0, len(s.orders))
+	for _, order := range s.orders {
+		if userID != "" && order.UserID != userID {
+			continue
+		}
+		if status != "" && order.Status != status {
+			continue
+		}
+		result = append(result, order)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+
+	if offset >= len(result) {
+		return []Order{}
+	}
+	result = result[offset:]
+	if limit > 0 && limit < len(result) {
+		result = result[:limit]
+	}
+	return result
 }
 
 func (s *Store) UpdateStatus(orderID, status string) (Order, error) {
