@@ -12,6 +12,8 @@ from app.database import (
     list_transactions,
 )
 from app.schemas import TransactionCreate, TransactionResponse
+from app.services.analytics import summarize_transactions
+from app.services.anomaly_model import detect_anomalies
 from app.services.risk_engine import calculate_risk_score
 
 app = FastAPI(title="FraudGuard", version="1.0.0")
@@ -54,6 +56,10 @@ def transaction_from_history(row) -> dict:
         "location": row["location"],
         "device_id": row["device_id"],
     }
+
+
+def row_to_dict(row) -> dict:
+    return dict(row)
 
 
 @app.get("/")
@@ -171,3 +177,29 @@ def stats():
         for row in data["high_risk_transactions"]
     ]
     return data
+
+
+@app.get("/analytics")
+def analytics(
+    user_id: str | None = None,
+    limit: int = Query(default=5000, ge=1, le=10000),
+):
+    rows = list_transactions(user_id=user_id, limit=limit, offset=0)
+    summary = summarize_transactions([row_to_dict(row) for row in rows])
+    summary["user_id"] = user_id
+    return summary
+
+
+@app.get("/analytics/anomalies")
+def anomaly_analysis(
+    user_id: str | None = None,
+    limit: int = Query(default=5000, ge=1, le=10000),
+):
+    rows = list_transactions(user_id=user_id, limit=limit, offset=0)
+    anomalies = detect_anomalies([row_to_dict(row) for row in rows])
+    return {
+        "user_id": user_id,
+        "minimum_training_rows": 20,
+        "anomalies": anomalies,
+        "model_used": "IsolationForest" if len(rows) >= 20 else None,
+    }
