@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"fraudguard-go/internal/flutterwave"
@@ -17,176 +20,67 @@ import (
 	"fraudguard-go/internal/payments"
 )
 
-type RiskCheckRequest struct {
-	UserID string `json:"user_id"`
-	Amount float64 `json:"amount"`
-	Location string `json:"location"`
-	DeviceID string `json:"device_id"`
+type RiskCheckRequest struct { UserID string `json:"user_id"`; Amount float64 `json:"amount"`; Location string `json:"location"`; DeviceID string `json:"device_id"` }
+type CheckoutRequest struct { RiskCheckRequest; Email string `json:"email"`; Name string `json:"name"`; PhoneNumber string `json:"phone_number"`; Currency string `json:"currency"` }
+type FraudChecker interface { CheckTransaction(context.Context, fraudguard.Transaction) (fraudguard.RiskResponse, error) }
+type PaymentGateway interface { CreatePayment(context.Context, flutterwave.PaymentRequest) (flutterwave.PaymentResponse, error); VerifyTransaction(context.Context, string) (flutterwave.VerifyResponse, error) }
+
+type Server struct { fraud FraudChecker; flw PaymentGateway; flwSecretKey, adminAPIKey, redirectURL string; payments *payments.Store; orders *orders.Store; mux *http.ServeMux }
+
+func newServer(f FraudChecker, p PaymentGateway, ps *payments.Store, os *orders.Store, secret, adminKey, redirect string) *Server { s:=&Server{fraud:f,flw:p,payments:ps,orders:os,flwSecretKey:secret,adminAPIKey:adminKey,redirectURL:redirect,mux:http.NewServeMux()};s.routes();return s }
+func(s *Server)routes(){s.mux.HandleFunc("/health",s.health);s.mux.HandleFunc("/risk-check",s.riskCheck);s.mux.HandleFunc("/checkout",s.checkout);s.mux.HandleFunc("/orders",s.ordersHandler);s.mux.HandleFunc("/admin/orders/",s.adminOrderHandler);s.mux.HandleFunc("/payment/callback",s.paymentCallback);s.mux.HandleFunc("/webhooks/flutterwave",s.flutterwaveWebhook)}
+func(s *Server)ServeHTTP(w http.ResponseWriter,r *http.Request){s.mux.ServeHTTP(w,r)}
+func(s *Server)health(w http.ResponseWriter,r *http.Request){if r.Method!=http.MethodGet{methodNotAllowed(w);return};writeJSON(w,http.StatusOK,map[string]string{"status":"healthy"})}
+
+func(s *Server)riskCheck(w http.ResponseWriter,r *http.Request){if r.Method!=http.MethodPost{methodNotAllowed(w);return};in,ok:=decodeRiskRequest(w,r);if !ok{return};tx:=newTransaction(in);risk,err:=s.fraud.CheckTransaction(r.Context(),tx);if err!=nil{log.Printf("risk check failed: %v",err);writeError(w,http.StatusBadGateway,"FraudGuard unavailable");return};writeJSON(w,http.StatusOK,map[string]any{"transaction_id":tx.TransactionID,"risk":risk})}
+
+func(s *Server)checkout(w http.ResponseWriter,r *http.Request){
+	if r.Method!=http.MethodPost{methodNotAllowed(w);return};var in CheckoutRequest;if !decodeJSON(w,r,&in){return}
+	if in.UserID==""||in.Amount<=0||in.Email==""||in.Location==""||in.DeviceID==""{writeError(w,http.StatusBadRequest,"user_id, amount, email, location and device_id are required");return}
+	currency:=strings.ToUpper(in.Currency);if currency==""{currency="NGN"};tx:=newTransaction(in.RiskCheckRequest);risk,err:=s.fraud.CheckTransaction(r.Context(),tx);if err!=nil{writeError(w,http.StatusBadGateway,"FraudGuard unavailable");return}
+	order:=orders.Order{OrderID:fmt.Sprintf("ord_%d",time.Now().UnixNano()),TransactionID:tx.TransactionID,UserID:in.UserID,Amount:in.Amount,Currency:currency,Email:in.Email,Name:in.Name,PhoneNumber:in.PhoneNumber,RiskScore:risk.RiskScore,RiskLevel:risk.RiskLevel,RiskDecision:risk.Decision,RiskReasons:risk.Reasons,Status:orders.StatusPending,PaymentStatus:payments.StatusPending}
+	switch risk.Decision{case "REJECT":order.Status=orders.StatusRejected;order.PaymentStatus=payments.StatusRejected;case "REVIEW":order.Status=orders.StatusReview;order.PaymentStatus=payments.StatusReview;case "ALLOW":default:writeError(w,http.StatusBadGateway,"invalid risk decision from FraudGuard");return}
+	if risk.Decision!="ALLOW"{if err:=s.orders.Create(order);err!=nil{writeError(w,http.StatusInternalServerError,"unable to create order");return};status:=http.StatusAccepted;if risk.Decision=="REJECT"{status=http.StatusForbidden};writeJSON(w,status,checkoutResult(order,risk,"order requires no immediate payment"));return}
+	if err:=s.orders.Create(order);err!=nil{writeError(w,http.StatusInternalServerError,"unable to create order");return}
+	if err:=s.initializePayment(r.Context(),&order);err!=nil{_,_=s.orders.UpdateStatus(order.OrderID,orders.StatusFailed);writeError(w,http.StatusBadGateway,err.Error());return}
+	writeJSON(w,http.StatusOK,checkoutResult(order,risk,"payment initialized"))
 }
 
-type CheckoutRequest struct {
-	RiskCheckRequest
-	Email string `json:"email"`
-	Name string `json:"name"`
-	PhoneNumber string `json:"phone_number"`
-	Currency string `json:"currency"`
+func(s *Server)initializePayment(ctx context.Context,order *orders.Order)error{
+	if s.flwSecretKey==""{return errors.New("FLW_SECRET_KEY is not configured")}
+	if p,ok:=s.payments.Get(order.TransactionID);ok{if p.Status==payments.StatusPaymentInitialized{order.Status=orders.StatusPayment;order.PaymentStatus=p.Status;order.PaymentLink=p.PaymentLink;return nil};if p.Status==payments.StatusPaid{order.Status=orders.StatusPaid;order.PaymentStatus=p.Status;return nil};if p.Status!=payments.StatusPending{return errors.New("payment is not eligible for initialization")}}else if err:=s.payments.Create(payments.Payment{TransactionID:order.TransactionID,Amount:order.Amount,Currency:order.Currency,Status:payments.StatusPending});err!=nil{return errors.New("unable to create payment state")}
+	p,err:=s.flw.CreatePayment(ctx,flutterwave.PaymentRequest{TxRef:order.TransactionID,Amount:order.Amount,Currency:order.Currency,RedirectURL:s.redirectURL,Customer:flutterwave.Customer{Email:order.Email,Name:order.Name,PhoneNumber:order.PhoneNumber},Customizations:struct{Title string `json:"title,omitempty"`}{Title:"FraudGuard Store"}});if err!=nil{_,_=s.payments.UpdateStatus(order.TransactionID,payments.StatusFailed);return errors.New("payment initialization failed")};if p.Data.Link==""{_,_=s.payments.UpdateStatus(order.TransactionID,payments.StatusFailed);return errors.New("payment provider returned no checkout link")}
+	if _,err:=s.payments.UpdateStatus(order.TransactionID,payments.StatusPaymentInitialized);err!=nil{return errors.New("unable to persist payment state")}
+	pay,_:=s.payments.Get(order.TransactionID);pay.PaymentLink=p.Data.Link
+	// Persist the hosted link by updating the existing record without changing its state.
+	if _,err:=s.payments.SetPaymentLink(order.TransactionID,p.Data.Link);err!=nil{return errors.New("unable to persist payment link")}
+	if _,err:=s.orders.UpdateStatus(order.OrderID,orders.StatusPayment);err!=nil{return errors.New("unable to persist order state")};if _,err:=s.orders.UpdatePaymentStatus(order.OrderID,payments.StatusPaymentInitialized);err!=nil{return errors.New("unable to persist order payment state")};updated,_:=s.orders.Get(order.OrderID);*order=updated;return nil
 }
 
-func main() {
-	fraudGuardURL := getenv("FRAUDGUARD_URL", "http://127.0.0.1:8000")
-	port := getenv("PORT", "8080")
-	flwSecretKey := os.Getenv("FLW_SECRET_KEY")
-	fraudClient := fraudguard.NewClient(fraudGuardURL)
-	flwClient := flutterwave.NewClient(flwSecretKey)
+func(s *Server)ordersHandler(w http.ResponseWriter,r *http.Request){if r.Method!=http.MethodGet{methodNotAllowed(w);return};q:=r.URL.Query();id,tx:=q.Get("id"),q.Get("transaction_id");if id!=""&&tx!=""{writeError(w,http.StatusBadRequest,"use either id or transaction_id, not both");return};if id!=""{o,ok:=s.orders.Get(id);if !ok{writeError(w,http.StatusNotFound,"order not found");return};writeJSON(w,http.StatusOK,o);return};if tx!=""{o,ok:=s.orders.GetByTransaction(tx);if !ok{writeError(w,http.StatusNotFound,"order not found");return};writeJSON(w,http.StatusOK,o);return};limit,offset,err:=pagination(q.Get("limit"),q.Get("offset"));if err!=nil{writeError(w,http.StatusBadRequest,err.Error());return};writeJSON(w,http.StatusOK,map[string]any{"orders":s.orders.List(q.Get("user_id"),q.Get("status"),limit,offset),"limit":limit,"offset":offset})}
 
-	paymentStore, err := payments.NewStore(getenv("PAYMENT_STORE_PATH", "payments.json"))
-	if err != nil { log.Fatalf("initialize payment store: %v", err) }
-	orderStore, err := orders.NewStore(getenv("ORDER_STORE_PATH", "orders.json"))
-	if err != nil { log.Fatalf("initialize order store: %v", err) }
-
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "healthy"})
-	})
-
-	http.HandleFunc("/risk-check", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"}); return }
-		input, ok := decodeRiskRequest(w, r); if !ok { return }
-		transaction := newTransaction(input)
-		risk, err := checkRisk(r.Context(), fraudClient, transaction)
-		if err != nil { log.Printf("risk check failed: %v", err); writeJSON(w, http.StatusBadGateway, map[string]string{"error": "FraudGuard unavailable"}); return }
-		writeJSON(w, http.StatusOK, map[string]any{"transaction_id": transaction.TransactionID, "risk": risk})
-	})
-
-	http.HandleFunc("/checkout", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"}); return }
-		var input CheckoutRequest
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return }
-		if input.Email == "" || input.UserID == "" || input.Amount <= 0 || input.Location == "" || input.DeviceID == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user_id, amount, email, location and device_id are required"}); return }
-
-		currency := input.Currency; if currency == "" { currency = "NGN" }
-		transaction := newTransaction(input.RiskCheckRequest)
-		risk, err := checkRisk(r.Context(), fraudClient, transaction)
-		if err != nil { log.Printf("risk check failed: %v", err); writeJSON(w, http.StatusBadGateway, map[string]string{"error": "FraudGuard unavailable"}); return }
-		orderID := fmt.Sprintf("ord_%d", time.Now().UnixNano())
-
-		createOrder := func(status, paymentStatus string) bool {
-			err := orderStore.Create(orders.Order{OrderID: orderID, TransactionID: transaction.TransactionID, UserID: input.UserID, Amount: input.Amount, Currency: currency, Status: status, PaymentStatus: paymentStatus})
-			if err != nil { log.Printf("create order: %v", err); writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to create order"}); return false }
-			return true
-		}
-
-		switch risk.Decision {
-		case "REJECT":
-			if !createOrder(orders.StatusRejected, payments.StatusRejected) { return }
-			writeJSON(w, http.StatusForbidden, map[string]any{"order_id": orderID, "transaction_id": transaction.TransactionID, "decision": risk.Decision, "order_status": orders.StatusRejected, "risk": risk}); return
-		case "REVIEW":
-			if !createOrder(orders.StatusReview, payments.StatusReview) { return }
-			writeJSON(w, http.StatusAccepted, map[string]any{"order_id": orderID, "transaction_id": transaction.TransactionID, "decision": risk.Decision, "order_status": orders.StatusReview, "message": "order requires risk review before payment", "risk": risk}); return
-		}
-
-		if flwSecretKey == "" { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "FLW_SECRET_KEY is not configured"}); return }
-		if !createOrder(orders.StatusPending, payments.StatusPending) { return }
-		if err := paymentStore.Create(payments.Payment{TransactionID: transaction.TransactionID, Amount: transaction.Amount, Currency: currency, Status: payments.StatusPending}); err != nil {
-			log.Printf("create pending payment: %v", err); _, _ = orderStore.UpdateStatus(orderID, orders.StatusFailed); writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to create payment state"}); return
-		}
-
-		redirectURL := getenv("FLW_REDIRECT_URL", "http://localhost:8080/payment/callback")
-		payment, err := flwClient.CreatePayment(r.Context(), flutterwave.PaymentRequest{TxRef: transaction.TransactionID, Amount: transaction.Amount, Currency: currency, RedirectURL: redirectURL, Customer: flutterwave.Customer{Email: input.Email, Name: input.Name, PhoneNumber: input.PhoneNumber}, Customizations: struct { Title string `json:"title,omitempty"` }{Title: "FraudGuard Store"}})
-		if err != nil {
-			_, _ = paymentStore.UpdateStatus(transaction.TransactionID, payments.StatusFailed); _, _ = orderStore.UpdatePaymentStatus(orderID, orders.StatusFailed); _, _ = orderStore.UpdateStatus(orderID, orders.StatusFailed)
-			log.Printf("Flutterwave payment initialization failed: %v", err); writeJSON(w, http.StatusBadGateway, map[string]string{"error": "payment initialization failed"}); return
-		}
-		if _, err := paymentStore.UpdateStatus(transaction.TransactionID, payments.StatusPaymentInitialized); err != nil { _, _ = orderStore.UpdateStatus(orderID, orders.StatusFailed); writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to persist payment state"}); return }
-		if _, err := orderStore.UpdateStatus(orderID, orders.StatusPayment); err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to persist order state"}); return }
-		if _, err := orderStore.UpdatePaymentStatus(orderID, orders.StatusPayment); err != nil { log.Printf("mark order payment status: %v", err) }
-		writeJSON(w, http.StatusOK, map[string]any{"order_id": orderID, "transaction_id": transaction.TransactionID, "decision": risk.Decision, "order_status": orders.StatusPayment, "payment_status": payments.StatusPaymentInitialized, "risk": risk, "payment_link": payment.Data.Link})
-	})
-
-	http.HandleFunc("/orders", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"}); return }
-		query := r.URL.Query()
-		orderID, transactionID := query.Get("id"), query.Get("transaction_id")
-		if orderID != "" && transactionID != "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "use either id or transaction_id, not both"}); return }
-
-		if orderID != "" {
-			order, ok := orderStore.Get(orderID)
-			if !ok { writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"}); return }
-			writeJSON(w, http.StatusOK, order)
-			return
-		}
-		if transactionID != "" {
-			order, ok := orderStore.GetByTransaction(transactionID)
-			if !ok { writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"}); return }
-			writeJSON(w, http.StatusOK, order)
-			return
-		}
-
-		limit, offset, err := pagination(query.Get("limit"), query.Get("offset"))
-		if err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()}); return }
-		status := query.Get("status")
-		userID := query.Get("user_id")
-		result := orderStore.List(userID, status, limit, offset)
-		writeJSON(w, http.StatusOK, map[string]any{"orders": result, "limit": limit, "offset": offset})
-	})
-
-	http.HandleFunc("/payment/callback", func(w http.ResponseWriter, r *http.Request) {
-		internalRef, flutterwaveID := r.URL.Query().Get("tx_ref"), r.URL.Query().Get("transaction_id")
-		callbackStatus := r.URL.Query().Get("status")
-		if internalRef == "" || flutterwaveID == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tx_ref and transaction_id are required"}); return }
-		if flwSecretKey == "" { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "FLW_SECRET_KEY is not configured"}); return }
-		expected, exists := paymentStore.Get(internalRef); if !exists { writeJSON(w, http.StatusNotFound, map[string]string{"error": "transaction not found"}); return }
-		verification, err := flwClient.VerifyTransaction(r.Context(), flutterwaveID); if err != nil { writeJSON(w, http.StatusBadGateway, map[string]string{"error": "payment verification failed"}); return }
-		verified := verification.Data.Status == "successful" && verification.Data.TxRef == internalRef && verification.Data.Currency == expected.Currency && verification.Data.ChargedAmount >= expected.Amount
-		order, orderExists := orderStore.GetByTransaction(internalRef)
-		if verified {
-			if _, err := paymentStore.MarkPaid(internalRef, fmt.Sprintf("%d", verification.Data.ID)); err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to persist paid state"}); return }
-			if orderExists { _, _ = orderStore.UpdatePaymentStatus(order.OrderID, orders.StatusPaid); _, _ = orderStore.UpdateStatus(order.OrderID, orders.StatusPaid) }
-		} else if verification.Data.Status == "failed" || verification.Data.Status == "cancelled" {
-			_, _ = paymentStore.UpdateStatus(internalRef, payments.StatusFailed); if orderExists { _, _ = orderStore.UpdatePaymentStatus(order.OrderID, orders.StatusFailed); _, _ = orderStore.UpdateStatus(order.OrderID, orders.StatusFailed) }
-		}
-		updated, _ := paymentStore.Get(internalRef); orderStatus := ""; if orderExists { updatedOrder, _ := orderStore.Get(order.OrderID); orderStatus = updatedOrder.Status }
-		writeJSON(w, http.StatusOK, map[string]any{"callback_status": callbackStatus, "verified": verified, "order_status": orderStatus, "payment_status": updated.Status, "transaction": verification.Data})
-	})
-
-	http.HandleFunc("/webhooks/flutterwave", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"}); return }
-		secretHash := os.Getenv("FLW_SECRET_HASH"); if secretHash == "" { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "FLW_SECRET_HASH is not configured"}); return }
-		rawBody, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)); if err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unable to read webhook"}); return }
-		signature := r.Header.Get("flutterwave-signature"); valid := flutterwave.VerifyWebhookSignature(rawBody, signature, secretHash); if !valid { signature = r.Header.Get("verif-hash"); valid = flutterwave.VerifyWebhookSecretHash(signature, secretHash) }; if !valid { writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid webhook signature"}); return }
-		var event struct { ID string `json:"id"`; Type string `json:"type"`; Data struct { ID string `json:"id"`; TxRef string `json:"tx_ref"`; Amount float64 `json:"amount"`; Currency string `json:"currency"`; Status string `json:"status"` } `json:"data"` }
-		if err := json.Unmarshal(rawBody, &event); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid webhook JSON"}); return }
-		payment, exists := paymentStore.Get(event.Data.TxRef); if !exists { log.Printf("Flutterwave webhook for unknown transaction: tx_ref=%s", event.Data.TxRef); writeJSON(w, http.StatusOK, map[string]string{"status": "received"}); return }
-		if payment.Status == payments.StatusPaid { writeJSON(w, http.StatusOK, map[string]string{"status": "already_processed"}); return }
-		order, orderExists := orderStore.GetByTransaction(payment.TransactionID)
-		if event.Data.Status == "successful" && event.Data.ID != "" {
-			verification, verifyErr := flwClient.VerifyTransaction(r.Context(), event.Data.ID); if verifyErr != nil { log.Printf("webhook verification failed: %v", verifyErr); writeJSON(w, http.StatusBadGateway, map[string]string{"error": "payment verification failed"}); return }
-			validPayment := verification.Data.Status == "successful" && verification.Data.TxRef == payment.TransactionID && verification.Data.Currency == payment.Currency && verification.Data.ChargedAmount >= payment.Amount
-			if validPayment { if _, err := paymentStore.MarkPaid(payment.TransactionID, fmt.Sprintf("%d", verification.Data.ID)); err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to persist payment state"}); return }; if orderExists { _, _ = orderStore.UpdatePaymentStatus(order.OrderID, orders.StatusPaid); _, _ = orderStore.UpdateStatus(order.OrderID, orders.StatusPaid) } }
-		} else if event.Data.Status == "failed" || event.Data.Status == "cancelled" { _, _ = paymentStore.UpdateStatus(payment.TransactionID, payments.StatusFailed); if orderExists { _, _ = orderStore.UpdatePaymentStatus(order.OrderID, orders.StatusFailed); _, _ = orderStore.UpdateStatus(order.OrderID, orders.StatusFailed) } }
-		log.Printf("Flutterwave webhook processed: id=%s type=%s tx_ref=%s status=%s", event.ID, event.Type, event.Data.TxRef, event.Data.Status)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "received"})
-	})
-
-	log.Printf("Go e-commerce service listening on :%s; FraudGuard=%s", port, fraudGuardURL)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+func(s *Server)adminOrderHandler(w http.ResponseWriter,r *http.Request){
+	if !s.authorizeAdmin(w,r){return};parts:=strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path,"/admin/orders/"),"/"),"/");if len(parts)!=2{writeError(w,http.StatusNotFound,"admin order route not found");return};id,action:=parts[0],parts[1];o,ok:=s.orders.Get(id);if !ok{writeError(w,http.StatusNotFound,"order not found");return}
+	switch action{
+	case "approve":
+		if o.Status==orders.StatusApproved||o.Status==orders.StatusPayment||o.Status==orders.StatusPaid{p,_:=s.payments.Get(o.TransactionID);writeJSON(w,http.StatusOK,map[string]any{"order":o,"payment_link":p.PaymentLink});return};if o.Status!=orders.StatusReview{writeError(w,http.StatusConflict,"only REVIEW orders can be approved");return};if _,err:=s.orders.UpdateStatus(id,orders.StatusApproved);err!=nil{writeError(w,http.StatusConflict,err.Error());return};_,_=s.orders.UpdatePaymentStatus(id,payments.StatusPending);o,_=s.orders.Get(id);if err:=s.initializePayment(r.Context(),&o);err!=nil{writeError(w,http.StatusBadGateway,err.Error());return};p,_:=s.payments.Get(o.TransactionID);writeJSON(w,http.StatusOK,map[string]any{"order":o,"payment_link":p.PaymentLink})
+	case "reject":
+		if o.Status==orders.StatusRejected{writeJSON(w,http.StatusOK,o);return};if o.Status!=orders.StatusReview{writeError(w,http.StatusConflict,"only REVIEW orders can be rejected");return};updated,err:=s.orders.UpdateStatus(id,orders.StatusRejected);if err!=nil{writeError(w,http.StatusConflict,err.Error());return};_,_=s.orders.UpdatePaymentStatus(id,payments.StatusRejected);writeJSON(w,http.StatusOK,updated)
+	default:writeError(w,http.StatusNotFound,"unknown admin action")}
 }
 
-func decodeRiskRequest(w http.ResponseWriter, r *http.Request) (RiskCheckRequest, bool) {
-	var input RiskCheckRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return RiskCheckRequest{}, false }
-	if input.UserID == "" || input.Amount <= 0 || input.Location == "" || input.DeviceID == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user_id, amount, location and device_id are required"}); return RiskCheckRequest{}, false }
-	return input, true
-}
+func(s *Server)paymentCallback(w http.ResponseWriter,r *http.Request){if r.Method!=http.MethodGet{methodNotAllowed(w);return};ref,flwID:=r.URL.Query().Get("tx_ref"),r.URL.Query().Get("transaction_id");if ref==""||flwID==""{writeError(w,http.StatusBadRequest,"tx_ref and transaction_id are required");return};if s.flwSecretKey==""{writeError(w,http.StatusServiceUnavailable,"FLW_SECRET_KEY is not configured");return};payment,ok:=s.payments.Get(ref);if !ok{writeError(w,http.StatusNotFound,"transaction not found");return};v,err:=s.flw.VerifyTransaction(r.Context(),flwID);if err!=nil{writeError(w,http.StatusBadGateway,"payment verification failed");return};verified:=v.Data.Status=="successful"&&v.Data.TxRef==ref&&v.Data.Currency==payment.Currency&&v.Data.ChargedAmount>=payment.Amount;o,exists:=s.orders.GetByTransaction(ref);if verified{if _,err:=s.payments.MarkPaid(ref,fmt.Sprintf("%d",v.Data.ID));err!=nil{writeError(w,http.StatusInternalServerError,"unable to persist paid state");return};if exists{_,_=s.orders.UpdatePaymentStatus(o.OrderID,orders.StatusPaid);_,_=s.orders.UpdateStatus(o.OrderID,orders.StatusPaid)}}else if v.Data.Status=="failed"||v.Data.Status=="cancelled"{_,_=s.payments.UpdateStatus(ref,payments.StatusFailed);if exists{_,_=s.orders.UpdatePaymentStatus(o.OrderID,orders.StatusFailed);_,_=s.orders.UpdateStatus(o.OrderID,orders.StatusFailed)}};updated,_:=s.payments.Get(ref);orderStatus:="";if exists{x,_:=s.orders.Get(o.OrderID);orderStatus=x.Status};writeJSON(w,http.StatusOK,map[string]any{"verified":verified,"order_status":orderStatus,"payment_status":updated.Status,"transaction":v.Data})}
 
-func pagination(rawLimit, rawOffset string) (int, int, error) {
-	limit, offset := 50, 0
-	var err error
-	if rawLimit != "" { limit, err = strconv.Atoi(rawLimit); if err != nil || limit < 1 || limit > 100 { return 0, 0, fmt.Errorf("limit must be between 1 and 100") } }
-	if rawOffset != "" { offset, err = strconv.Atoi(rawOffset); if err != nil || offset < 0 { return 0, 0, fmt.Errorf("offset must be zero or greater") } }
-	return limit, offset, nil
-}
+func(s *Server)flutterwaveWebhook(w http.ResponseWriter,r *http.Request){if r.Method!=http.MethodPost{methodNotAllowed(w);return};secret:=os.Getenv("FLW_SECRET_HASH");if secret==""{writeError(w,http.StatusServiceUnavailable,"FLW_SECRET_HASH is not configured");return};raw,err:=io.ReadAll(io.LimitReader(r.Body,1<<20));if err!=nil{writeError(w,http.StatusBadRequest,"unable to read webhook");return};valid:=flutterwave.VerifyWebhookSignature(raw,r.Header.Get("flutterwave-signature"),secret);if !valid{valid=flutterwave.VerifyWebhookSecretHash(r.Header.Get("verif-hash"),secret)};if !valid{writeError(w,http.StatusUnauthorized,"invalid webhook signature");return};var event struct{Data struct{ID string `json:"id"`;TxRef string `json:"tx_ref"`;Status string `json:"status"`} `json:"data"`};if err:=json.Unmarshal(raw,&event);err!=nil{writeError(w,http.StatusBadRequest,"invalid webhook JSON");return};p,ok:=s.payments.Get(event.Data.TxRef);if !ok{writeJSON(w,http.StatusOK,map[string]string{"status":"received"});return};if p.Status==payments.StatusPaid{writeJSON(w,http.StatusOK,map[string]string{"status":"already_processed"});return};o,exists:=s.orders.GetByTransaction(p.TransactionID);if event.Data.Status=="successful"&&event.Data.ID!=""{v,err:=s.flw.VerifyTransaction(r.Context(),event.Data.ID);if err!=nil{writeError(w,http.StatusBadGateway,"payment verification failed");return};good:=v.Data.Status=="successful"&&v.Data.TxRef==p.TransactionID&&v.Data.Currency==p.Currency&&v.Data.ChargedAmount>=p.Amount;if good{if _,err:=s.payments.MarkPaid(p.TransactionID,fmt.Sprintf("%d",v.Data.ID));err!=nil{writeError(w,http.StatusInternalServerError,"unable to persist payment state");return};if exists{_,_=s.orders.UpdatePaymentStatus(o.OrderID,orders.StatusPaid);_,_=s.orders.UpdateStatus(o.OrderID,orders.StatusPaid)}}}else if event.Data.Status=="failed"||event.Data.Status=="cancelled"{_,_=s.payments.UpdateStatus(p.TransactionID,payments.StatusFailed);if exists{_,_=s.orders.UpdatePaymentStatus(o.OrderID,orders.StatusFailed);_,_=s.orders.UpdateStatus(o.OrderID,orders.StatusFailed)}};writeJSON(w,http.StatusOK,map[string]string{"status":"received"})}
 
-func newTransaction(input RiskCheckRequest) fraudguard.Transaction { return fraudguard.Transaction{TransactionID: fmt.Sprintf("txn_%d", time.Now().UnixNano()), UserID: input.UserID, Amount: input.Amount, Timestamp: time.Now().UTC(), Location: input.Location, DeviceID: input.DeviceID} }
-func checkRisk(ctx context.Context, client *fraudguard.Client, transaction fraudguard.Transaction) (fraudguard.RiskResponse, error) { checkCtx, cancel := context.WithTimeout(ctx, 6*time.Second); defer cancel(); return client.CheckTransaction(checkCtx, transaction) }
-func getenv(key, fallback string) string { if value := os.Getenv(key); value != "" { return value }; return fallback }
-func writeJSON(w http.ResponseWriter, status int, value any) { w.Header().Set("Content-Type", "application/json"); w.WriteHeader(status); _ = json.NewEncoder(w).Encode(value) }
+func(s *Server)authorizeAdmin(w http.ResponseWriter,r *http.Request)bool{if s.adminAPIKey==""{writeError(w,http.StatusServiceUnavailable,"ADMIN_API_KEY is not configured");return false};provided:=r.Header.Get("X-Admin-API-Key");if subtle.ConstantTimeCompare([]byte(provided),[]byte(s.adminAPIKey))!=1{writeError(w,http.StatusUnauthorized,"invalid admin credentials");return false};return true}
+func main(){fraudURL:=getenv("FRAUDGUARD_URL","http://127.0.0.1:8000");secret:=os.Getenv("FLW_SECRET_KEY");ps,err:=payments.NewStore(getenv("PAYMENT_STORE_PATH","payments.json"));if err!=nil{log.Fatal(err)};osr,err:=orders.NewStore(getenv("ORDER_STORE_PATH","orders.json"));if err!=nil{log.Fatal(err)};s:=newServer(fraudguard.NewClient(fraudURL),flutterwave.NewClient(secret),ps,osr,secret,os.Getenv("ADMIN_API_KEY"),getenv("FLW_REDIRECT_URL","http://localhost:8080/payment/callback"));port:=getenv("PORT","8080");log.Printf("Go e-commerce service listening on :%s; FraudGuard=%s",port,fraudURL);log.Fatal(http.ListenAndServe(":"+port,s))}
+func decodeRiskRequest(w http.ResponseWriter,r *http.Request)(RiskCheckRequest,bool){var in RiskCheckRequest;if !decodeJSON(w,r,&in){return RiskCheckRequest{},false};if in.UserID==""||in.Amount<=0||in.Location==""||in.DeviceID==""{writeError(w,http.StatusBadRequest,"user_id, amount, location and device_id are required");return RiskCheckRequest{},false};return in,true}
+func decodeJSON(w http.ResponseWriter,r *http.Request,v any)bool{r.Body=http.MaxBytesReader(w,r.Body,1<<20);d:=json.NewDecoder(r.Body);if err:=d.Decode(v);err!=nil{writeError(w,http.StatusBadRequest,"invalid JSON");return false};if err:=d.Decode(&struct{}{});err!=io.EOF{writeError(w,http.StatusBadRequest,"request body must contain one JSON object");return false};return true}
+func pagination(a,b string)(int,int,error){limit,offset:=50,0;var err error;if a!=""{limit,err=strconv.Atoi(a);if err!=nil||limit<1||limit>100{return 0,0,fmt.Errorf("limit must be between 1 and 100")}};if b!=""{offset,err=strconv.Atoi(b);if err!=nil||offset<0{return 0,0,fmt.Errorf("offset must be zero or greater")}};return limit,offset,nil}
+func newTransaction(in RiskCheckRequest)fraudguard.Transaction{return fraudguard.Transaction{TransactionID:fmt.Sprintf("txn_%d",time.Now().UnixNano()),UserID:in.UserID,Amount:in.Amount,Timestamp:time.Now().UTC(),Location:in.Location,DeviceID:in.DeviceID}}
+func checkoutResult(o orders.Order,r fraudguard.RiskResponse,msg string)map[string]any{return map[string]any{"order_id":o.OrderID,"transaction_id":o.TransactionID,"decision":r.Decision,"order_status":o.Status,"payment_status":o.PaymentStatus,"risk":r,"message":msg}}
+func writeJSON(w http.ResponseWriter,status int,v any){w.Header().Set("Content-Type","application/json");w.WriteHeader(status);_=json.NewEncoder(w).Encode(v)}
+func writeError(w http.ResponseWriter,status int,msg string){writeJSON(w,status,map[string]string{"error":msg})}
+func methodNotAllowed(w http.ResponseWriter){writeError(w,http.StatusMethodNotAllowed,"method not allowed")}
+func getenv(k,f string)string{if v:=os.Getenv(k);v!=""{return v};return f}
