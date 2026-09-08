@@ -8,11 +8,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"fraudguard-go/internal/flutterwave"
 	"fraudguard-go/internal/fraudguard"
+	"fraudguard-go/internal/payments"
 )
 
 type RiskCheckRequest struct {
@@ -30,16 +30,6 @@ type CheckoutRequest struct {
 	Currency    string `json:"currency"`
 }
 
-type pendingPayment struct {
-	Amount   float64
-	Currency string
-}
-
-var pendingPayments = struct {
-	sync.RWMutex
-	items map[string]pendingPayment
-}{items: make(map[string]pendingPayment)}
-
 func main() {
 	fraudGuardURL := getenv("FRAUDGUARD_URL", "http://127.0.0.1:8000")
 	port := getenv("PORT", "8080")
@@ -47,6 +37,11 @@ func main() {
 
 	fraudClient := fraudguard.NewClient(fraudGuardURL)
 	flwClient := flutterwave.NewClient(flwSecretKey)
+
+	paymentStore, err := payments.NewStore(getenv("PAYMENT_STORE_PATH", "payments.json"))
+	if err != nil {
+		log.Fatalf("initialize payment store: %v", err)
+	}
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "healthy"})
@@ -104,6 +99,10 @@ func main() {
 
 		switch risk.Decision {
 		case "REJECT":
+			_, storeErr := paymentStore.Create(payments.Payment{TransactionID: transaction.TransactionID, Amount: transaction.Amount, Currency: input.Currency, Status: payments.StatusRejected})
+			if storeErr != nil {
+				log.Printf("store rejected payment: %v", storeErr)
+			}
 			writeJSON(w, http.StatusForbidden, map[string]any{
 				"transaction_id": transaction.TransactionID,
 				"decision":       risk.Decision,
@@ -111,6 +110,10 @@ func main() {
 			})
 			return
 		case "REVIEW":
+			_, storeErr := paymentStore.Create(payments.Payment{TransactionID: transaction.TransactionID, Amount: transaction.Amount, Currency: input.Currency, Status: payments.StatusReview})
+			if storeErr != nil {
+				log.Printf("store review payment: %v", storeErr)
+			}
 			writeJSON(w, http.StatusAccepted, map[string]any{
 				"transaction_id": transaction.TransactionID,
 				"decision":       risk.Decision,
@@ -130,6 +133,17 @@ func main() {
 			currency = "NGN"
 		}
 
+		if err := paymentStore.Create(payments.Payment{
+			TransactionID: transaction.TransactionID,
+			Amount:        transaction.Amount,
+			Currency:      currency,
+			Status:        payments.StatusPending,
+		}); err != nil {
+			log.Printf("create pending payment: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to create payment state"})
+			return
+		}
+
 		redirectURL := getenv("FLW_REDIRECT_URL", "http://localhost:8080/payment/callback")
 		payment, err := flwClient.CreatePayment(r.Context(), flutterwave.PaymentRequest{
 			TxRef:       transaction.TransactionID,
@@ -146,19 +160,26 @@ func main() {
 			}{Title: "FraudGuard Store"},
 		})
 		if err != nil {
+			_, updateErr := paymentStore.UpdateStatus(transaction.TransactionID, payments.StatusFailed)
+			if updateErr != nil {
+				log.Printf("mark payment failed: %v", updateErr)
+			}
 			log.Printf("Flutterwave payment initialization failed: %v", err)
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "payment initialization failed"})
 			return
 		}
 
-		pendingPayments.Lock()
-		pendingPayments.items[transaction.TransactionID] = pendingPayment{Amount: transaction.Amount, Currency: currency}
-		pendingPayments.Unlock()
+		if _, err := paymentStore.UpdateStatus(transaction.TransactionID, payments.StatusPaymentInitialized); err != nil {
+			log.Printf("mark payment initialized: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to persist payment state"})
+			return
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"transaction_id": transaction.TransactionID,
 			"decision":       risk.Decision,
 			"risk":           risk,
+			"payment_status": payments.StatusPaymentInitialized,
 			"payment_link":   payment.Data.Link,
 		})
 	})
@@ -177,11 +198,9 @@ func main() {
 			return
 		}
 
-		pendingPayments.RLock()
-		expected, exists := pendingPayments.items[internalRef]
-		pendingPayments.RUnlock()
+		expected, exists := paymentStore.Get(internalRef)
 		if !exists {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "pending transaction not found"})
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "transaction not found"})
 			return
 		}
 
@@ -197,14 +216,21 @@ func main() {
 			verification.Data.ChargedAmount >= expected.Amount
 
 		if verified {
-			pendingPayments.Lock()
-			delete(pendingPayments.items, internalRef)
-			pendingPayments.Unlock()
+			if _, err := paymentStore.MarkPaid(internalRef, fmt.Sprintf("%d", verification.Data.ID)); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to persist paid state"})
+				return
+			}
+		} else if verification.Data.Status == "failed" || verification.Data.Status == "cancelled" {
+			if _, err := paymentStore.UpdateStatus(internalRef, payments.StatusFailed); err != nil {
+				log.Printf("mark failed payment: %v", err)
+			}
 		}
 
+		updated, _ := paymentStore.Get(internalRef)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"callback_status": callbackStatus,
 			"verified":        verified,
+			"payment_status":  updated.Status,
 			"transaction":     verification.Data,
 		})
 	})
@@ -254,9 +280,44 @@ func main() {
 			return
 		}
 
-		// Acknowledge quickly. Production fulfillment should enqueue this event,
-		// deduplicate it, then re-query Flutterwave and verify amount/currency/ref.
-		log.Printf("Flutterwave webhook received: id=%s type=%s tx_ref=%s status=%s", event.ID, event.Type, event.Data.TxRef, event.Data.Status)
+		payment, exists := paymentStore.Get(event.Data.TxRef)
+		if !exists {
+			log.Printf("Flutterwave webhook for unknown transaction: tx_ref=%s", event.Data.TxRef)
+			writeJSON(w, http.StatusOK, map[string]string{"status": "received"})
+			return
+		}
+
+		if payment.Status == payments.StatusPaid {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "already_processed"})
+			return
+		}
+
+		if event.Data.Status == "successful" && event.Data.ID != "" {
+			verification, verifyErr := flwClient.VerifyTransaction(r.Context(), event.Data.ID)
+			if verifyErr != nil {
+				log.Printf("webhook verification failed: %v", verifyErr)
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": "payment verification failed"})
+				return
+			}
+
+			validPayment := verification.Data.Status == "successful" &&
+				verification.Data.TxRef == payment.TransactionID &&
+				verification.Data.Currency == payment.Currency &&
+				verification.Data.ChargedAmount >= payment.Amount
+			if validPayment {
+				if _, err := paymentStore.MarkPaid(payment.TransactionID, fmt.Sprintf("%d", verification.Data.ID)); err != nil {
+					log.Printf("persist paid webhook state: %v", err)
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to persist payment state"})
+					return
+				}
+			}
+		} else if event.Data.Status == "failed" || event.Data.Status == "cancelled" {
+			if _, err := paymentStore.UpdateStatus(payment.TransactionID, payments.StatusFailed); err != nil {
+				log.Printf("persist failed webhook state: %v", err)
+			}
+		}
+
+		log.Printf("Flutterwave webhook processed: id=%s type=%s tx_ref=%s status=%s", event.ID, event.Type, event.Data.TxRef, event.Data.Status)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "received"})
 	})
 
