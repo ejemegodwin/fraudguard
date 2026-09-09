@@ -16,7 +16,7 @@ from app.services.analytics import summarize_transactions
 from app.services.anomaly_model import detect_anomalies
 from app.services.risk_engine import calculate_risk_score
 
-app = FastAPI(title="FraudGuard", version="1.4.0")
+app = FastAPI(title="FraudGuard", version="1.5.0")
 initialize_database()
 BASE_DIR = Path(__file__).resolve().parent.parent
 DASHBOARD_PATH = BASE_DIR / "static" / "dashboard.html"
@@ -24,6 +24,7 @@ ANALYZE_PATH = BASE_DIR / "static" / "analyze.html"
 INVESTIGATE_PATH = BASE_DIR / "static" / "investigate.html"
 STORE_PATH = BASE_DIR / "static" / "store.html"
 REVIEW_PATH = BASE_DIR / "static" / "review.html"
+PAYMENTS_PATH = BASE_DIR / "static" / "payments.html"
 FRAUDGUARD_API_KEY = os.getenv("FRAUDGUARD_API_KEY", "")
 GO_SERVICE_URL = os.getenv("GO_SERVICE_URL", "http://127.0.0.1:8080").rstrip("/")
 
@@ -31,10 +32,10 @@ DASHBOARD_BRIDGE = r'''<style>
 .fg-workflow{position:fixed;right:26px;bottom:24px;z-index:9999;display:flex;gap:8px;align-items:center}
 .fg-workflow a{display:inline-flex;align-items:center;gap:8px;background:#111827;color:#fff;text-decoration:none;border-radius:10px;padding:11px 14px;font:700 11px Inter,system-ui,sans-serif;box-shadow:0 12px 30px rgba(17,24,39,.22)}
 .fg-workflow a:hover{transform:translateY(-1px)}.fg-count{min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:#e4a832;color:#fff;display:grid;place-items:center;font-size:9px}
-.fg-analyze{background:#635bff!important}.fg-review{background:#111827!important}
+.fg-analyze{background:#635bff!important}.fg-review{background:#111827!important}.fg-payments{background:#334155!important}
 .fg-clickable{cursor:pointer}.fg-clickable:hover{background:#faf9ff}
 </style>
-<div class="fg-workflow"><a class="fg-analyze" href="/analyze">+ Analyze</a><a class="fg-review" href="/review">Review Queue <span id="fgReviewCount" class="fg-count">0</span></a></div>
+<div class="fg-workflow"><a class="fg-analyze" href="/analyze">+ Analyze</a><a class="fg-review" href="/review">Review Queue <span id="fgReviewCount" class="fg-count">0</span></a><a class="fg-payments" href="/payments">Payments</a></div>
 <script>
 (function(){
   function reviewCount(){fetch('/ecommerce/orders?status=REVIEW&limit=100').then(function(r){return r.ok?r.json():null}).then(function(d){if(d&&Array.isArray(d.orders))document.getElementById('fgReviewCount').textContent=d.orders.length}).catch(function(){});}
@@ -93,8 +94,7 @@ def proxy_go(path: str, payload: dict | None = None, method: str = "POST", heade
         return JSONResponse(content={"detail": "E-commerce service is unavailable"}, status_code=503)
 
 @app.get("/")
-def root():
-    return dashboard_response()
+def root(): return dashboard_response()
 @app.get("/health")
 def health(): return {"status": "healthy"}
 @app.get("/ready")
@@ -111,12 +111,16 @@ def investigate(transaction_id: str): return FileResponse(INVESTIGATE_PATH)
 def store(): return FileResponse(STORE_PATH)
 @app.get("/review")
 def review(): return FileResponse(REVIEW_PATH)
+@app.get("/payments")
+def payments(): return FileResponse(PAYMENTS_PATH)
+
 @app.post("/ecommerce/checkout")
 def ecommerce_checkout(payload: dict):
     required = ("user_id", "amount", "email", "location", "device_id")
     missing = [field for field in required if field not in payload or payload[field] in (None, "")]
     if missing: raise HTTPException(status_code=400, detail=f"missing fields: {', '.join(missing)}")
     return proxy_go("/checkout", payload)
+
 @app.get("/ecommerce/orders")
 def ecommerce_orders(user_id: str | None = None, status: str | None = None, limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0)):
     query = []
@@ -124,12 +128,13 @@ def ecommerce_orders(user_id: str | None = None, status: str | None = None, limi
     if status: query.append("status=" + urllib.parse.quote(status))
     query += [f"limit={limit}", f"offset={offset}"]
     return proxy_go("/orders?" + "&".join(query), method="GET")
+
 @app.post("/ecommerce/admin/orders/{order_id}/{action}")
 def ecommerce_admin_order(order_id: str, action: str, request: Request):
     key = request.headers.get("X-Admin-API-Key", "")
     if not key: raise HTTPException(status_code=401, detail="admin API key required")
     if action not in ("approve", "reject"): raise HTTPException(status_code=404, detail="unknown admin action")
-    return proxy_go(f"/admin/orders/{urllib.parse.quote(order_id)}/{action}", method="POST", headers={"X-Admin-API-Key": key})
+    return proxy_go(f"/admin/orders/{urllib.parse.quote(order_id, safe='')}/{action}", method="POST", headers={"X-Admin-API-Key": key})
 
 @app.post("/transactions", response_model=TransactionResponse)
 def create_transaction(transaction: TransactionCreate, request: Request):
@@ -153,24 +158,29 @@ def create_transaction(transaction: TransactionCreate, request: Request):
     created = get_transaction(transaction.transaction_id)
     if created is None: raise HTTPException(status_code=500, detail="transaction could not be stored")
     return row_to_response(created)
+
 @app.get("/transactions", response_model=list[TransactionResponse])
 def get_transactions(user_id: str | None = None, limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0)):
     return [row_to_response(row) for row in list_transactions(user_id=user_id, limit=limit, offset=offset)]
+
 @app.get("/transactions/{transaction_id}", response_model=TransactionResponse)
 def get_transaction_by_id(transaction_id: str):
     row = get_transaction(transaction_id)
     if row is None: raise HTTPException(status_code=404, detail="transaction not found")
     return row_to_response(row)
+
 @app.get("/stats")
 def stats():
     data = get_stats()
     data["high_risk_transactions"] = [{"transaction_id": row["transaction_id"], "user_id": row["user_id"], "amount": row["amount"], "risk_score": row["risk_score"], "risk_level": row["risk_level"], "decision": row["decision"], "reasons": json.loads(row["reasons"]), "timestamp": row["timestamp"]} for row in data["high_risk_transactions"]]
     return data
+
 @app.get("/analytics")
 def analytics(user_id: str | None = None, limit: int = Query(default=5000, ge=1, le=10000)):
     rows = list_transactions(user_id=user_id, limit=limit, offset=0)
     summary = summarize_transactions([row_to_dict(row) for row in rows]); summary["user_id"] = user_id
     return summary
+
 @app.get("/analytics/anomalies")
 def anomaly_analysis(user_id: str | None = None, limit: int = Query(default=5000, ge=1, le=10000)):
     rows = list_transactions(user_id=user_id, limit=limit, offset=0)
