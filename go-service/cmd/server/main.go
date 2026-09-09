@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"fraudguard-go/internal/flutterwave"
-	"fraudguard-go/internal/fraudguard"
-	"fraudguard-go/internal/orders"
-	"fraudguard-go/internal/payments"
+	"go-service/internal/flutterwave"
+	"go-service/internal/fraudguard"
+	"go-service/internal/orders"
+	"go-service/internal/payments"
 )
 
 type RiskCheckRequest struct { UserID string `json:"user_id"`; Amount float64 `json:"amount"`; Location string `json:"location"`; DeviceID string `json:"device_id"` }
