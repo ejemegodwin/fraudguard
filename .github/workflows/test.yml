@@ -41,3 +41,9 @@ jobs:
 
       - name: Run Go tests
         run: cd go-service && go test ./...
+
+      - name: Run Go race detector
+        run: cd go-service && go test -race ./...
+
+      - name: Run Go vet
+        run: cd go-service && go vet ./...
