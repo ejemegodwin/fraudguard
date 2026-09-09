@@ -47,3 +47,13 @@ jobs:
 
       - name: Run Go vet
         run: cd go-service && go vet ./...
+
+  docker-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build FraudGuard image
+        run: docker build --tag fraudguard:ci .
