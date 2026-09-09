@@ -28,6 +28,7 @@ initialize_database()
 BASE_DIR = Path(__file__).resolve().parent.parent
 DASHBOARD_PATH = BASE_DIR / "static" / "dashboard.html"
 ANALYZE_PATH = BASE_DIR / "static" / "analyze.html"
+INVESTIGATE_PATH = BASE_DIR / "static" / "investigate.html"
 FRAUDGUARD_API_KEY = os.getenv("FRAUDGUARD_API_KEY", "")
 
 
@@ -114,6 +115,11 @@ def dashboard():
 @app.get("/analyze")
 def analyze():
     return FileResponse(ANALYZE_PATH)
+
+
+@app.get("/investigate/{transaction_id}")
+def investigate(transaction_id: str):
+    return FileResponse(INVESTIGATE_PATH)
 
 
 @app.post("/transactions", response_model=TransactionResponse)
