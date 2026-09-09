@@ -62,3 +62,53 @@ func TestStoreRejectsDuplicateTransaction(t *testing.T) {
 		t.Fatal("expected duplicate payment to be rejected")
 	}
 }
+
+func TestWebhookEventIsPersistentAndIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "payments.json")
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := store.ClaimWebhookEvent("flw_123")
+	if err != nil || !claimed {
+		t.Fatalf("expected first claim, claimed=%v err=%v", claimed, err)
+	}
+
+	claimed, err = store.ClaimWebhookEvent("flw_123")
+	if err != nil || claimed {
+		t.Fatalf("expected duplicate claim to be rejected, claimed=%v err=%v", claimed, err)
+	}
+
+	if err := store.CompleteWebhookEvent("flw_123"); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err = reloaded.ClaimWebhookEvent("flw_123")
+	if err != nil || claimed {
+		t.Fatalf("expected persisted processed event to remain idempotent, claimed=%v err=%v", claimed, err)
+	}
+}
+
+func TestWebhookEventCanBeReleasedAfterFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "payments.json")
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimWebhookEvent("flw_retry")
+	if err != nil || !claimed {
+		t.Fatal("expected initial webhook claim")
+	}
+	if err := store.ReleaseWebhookEvent("flw_retry"); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err = store.ClaimWebhookEvent("flw_retry")
+	if err != nil || !claimed {
+		t.Fatalf("expected released event to be claimable again, claimed=%v err=%v", claimed, err)
+	}
+}
