@@ -4,4 +4,14 @@ __pycache__/
 venv/
 .env
 fraudguard.db
+*.db
 .pytest_cache/
+
+# Go service runtime state
+payments.json
+payments.json.tmp
+payments.json.webhooks.json
+payments.json.webhooks.json.tmp
+orders.json
+orders.json.tmp
+*.json.tmp
