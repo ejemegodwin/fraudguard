@@ -1,11 +1,13 @@
 import json
 import sqlite3
 import os
+import urllib.error
+import urllib.request
 from datetime import timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.database import (
     check_database,
@@ -21,7 +23,7 @@ from app.services.analytics import summarize_transactions
 from app.services.anomaly_model import detect_anomalies
 from app.services.risk_engine import calculate_risk_score
 
-app = FastAPI(title="FraudGuard", version="1.1.0")
+app = FastAPI(title="FraudGuard", version="1.2.0")
 
 initialize_database()
 
@@ -29,7 +31,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DASHBOARD_PATH = BASE_DIR / "static" / "dashboard.html"
 ANALYZE_PATH = BASE_DIR / "static" / "analyze.html"
 INVESTIGATE_PATH = BASE_DIR / "static" / "investigate.html"
+STORE_PATH = BASE_DIR / "static" / "store.html"
 FRAUDGUARD_API_KEY = os.getenv("FRAUDGUARD_API_KEY", "")
+GO_SERVICE_URL = os.getenv("GO_SERVICE_URL", "http://127.0.0.1:8080").rstrip("/")
 
 
 def normalized_timestamp(transaction: TransactionCreate) -> str:
@@ -90,6 +94,33 @@ def require_service_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid API credentials")
 
 
+def proxy_go_checkout(payload: dict) -> JSONResponse:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        f"{GO_SERVICE_URL}/checkout",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            raw = response.read().decode("utf-8")
+            data = json.loads(raw) if raw else {}
+            return JSONResponse(content=data, status_code=response.status)
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read().decode("utf-8")
+            data = json.loads(raw) if raw else {"detail": "Go checkout service rejected the request"}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            data = {"detail": "Go checkout service rejected the request"}
+        return JSONResponse(content=data, status_code=exc.code)
+    except (urllib.error.URLError, TimeoutError):
+        return JSONResponse(
+            content={"detail": "E-commerce service is unavailable"},
+            status_code=503,
+        )
+
+
 @app.get("/")
 def root():
     return FileResponse(DASHBOARD_PATH)
@@ -120,6 +151,20 @@ def analyze():
 @app.get("/investigate/{transaction_id}")
 def investigate(transaction_id: str):
     return FileResponse(INVESTIGATE_PATH)
+
+
+@app.get("/store")
+def store():
+    return FileResponse(STORE_PATH)
+
+
+@app.post("/ecommerce/checkout")
+def ecommerce_checkout(payload: dict):
+    required = ("user_id", "amount", "email", "location", "device_id")
+    missing = [field for field in required if field not in payload or payload[field] in (None, "")]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"missing fields: {', '.join(missing)}")
+    return proxy_go_checkout(payload)
 
 
 @app.post("/transactions", response_model=TransactionResponse)
