@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FraudGuard Store — Protected Checkout</title>
+  <style>
+    :root{--ink:#172033;--muted:#778198;--line:#e7eaf1;--bg:#f5f6fa;--panel:#fff;--purple:#635bff;--green:#159570;--amber:#c78312;--red:#d64545;--shadow:0 18px 45px rgba(20,28,50,.08)}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.page{min-height:100vh}.top{height:70px;background:#111827;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 6%;}.brand{display:flex;align-items:center;gap:10px;font-weight:800}.shield{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#756cff,#4f46e5);display:grid;place-items:center}.shield svg{width:19px}.secure{font-size:11px;color:#aeb7c8}.wrap{width:min(1080px,92%);margin:42px auto}.crumb{font-size:12px;color:var(--muted);margin-bottom:18px}.grid{display:grid;grid-template-columns:1.15fr .85fr;gap:24px}.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow)}.card-head{padding:24px 26px;border-bottom:1px solid var(--line)}h1{font-size:27px;letter-spacing:-.7px;margin:0 0 7px}.sub{font-size:13px;color:var(--muted);margin:0}.body{padding:26px}.section-title{font-size:13px;font-weight:800;margin:0 0 16px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:15px}.field.full{grid-column:1/-1}label{display:block;font-size:11px;font-weight:700;margin-bottom:7px;color:#59647a}input,select{width:100%;height:44px;border:1px solid var(--line);border-radius:9px;padding:0 12px;outline:none;background:#fbfcfe;color:var(--ink);font-size:13px}input:focus,select:focus{border-color:#aaa4ff;box-shadow:0 0 0 3px rgba(99,91,255,.08)}.actions{display:flex;gap:10px;margin-top:20px}.btn{height:44px;border:0;border-radius:9px;padding:0 17px;font-weight:800;font-size:12px;cursor:pointer}.primary{background:var(--purple);color:#fff}.secondary{background:#f0f1f6;color:#515c72}.btn:disabled{opacity:.55;cursor:not-allowed}.product{padding:26px}.product-badge{display:inline-flex;background:#eeedff;color:#564ed6;padding:6px 9px;border-radius:7px;font-size:10px;font-weight:800}.product h2{font-size:20px;margin:16px 0 8px}.product p{font-size:12px;line-height:1.6;color:var(--muted)}.price{font-size:29px;font-weight:850;margin:25px 0}.protection{border-top:1px solid var(--line);padding-top:18px;display:grid;gap:12px}.protect{display:flex;gap:10px;font-size:11px;color:#59647a;line-height:1.45}.protect i{width:22px;height:22px;border-radius:7px;background:#e8f8f2;color:var(--green);display:grid;place-items:center;font-style:normal;font-weight:900;flex:none}.result{margin-top:20px;border-radius:12px;padding:17px;display:none}.result.show{display:block}.result.allow{background:#e8f8f2;border:1px solid #c9ecdf}.result.review{background:#fff5df;border:1px solid #f2dfb1}.result.reject{background:#ffebeb;border:1px solid #f1c9c9}.result h3{margin:0 0 6px;font-size:14px}.result p{margin:0;color:#5f687b;font-size:11px;line-height:1.5}.result .score{font-size:23px;font-weight:850;margin:10px 0}.result a{display:inline-block;margin-top:13px;background:#fff;border-radius:8px;padding:10px 13px;color:#5149d8;text-decoration:none;font-size:11px;font-weight:800}.spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;display:inline-block;vertical-align:-3px;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.notice{font-size:10px;color:#8992a5;margin-top:13px;line-height:1.5}.navlink{color:#aeb7c8;text-decoration:none;font-size:11px}.navlink:hover{color:#fff}@media(max-width:800px){.grid{grid-template-columns:1fr}.fields{grid-template-columns:1fr}.field.full{grid-column:auto}.wrap{margin:25px auto}.top{padding:0 4%}}
+  </style>
+</head>
+<body>
+<header class="top"><div class="brand"><div class="shield"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l7 3v5c0 4.7-3 8.3-7 10-4-1.7-7-5.3-7-10V6l7-3z"/><path d="M9 12l2 2 4-5"/></svg></div>FraudGuard Store</div><div class="secure">Protected checkout · <a class="navlink" href="/dashboard">Operations dashboard</a></div></header>
+<main class="wrap">
+  <div class="crumb">Store / Secure checkout</div>
+  <div class="grid">
+    <section class="card">
+      <div class="card-head"><h1>Complete your purchase</h1><p class="sub">Every checkout is screened by FraudGuard before payment is released.</p></div>
+      <div class="body">
+        <p class="section-title">Customer details</p>
+        <form id="checkoutForm">
+          <div class="fields">
+            <div><label for="name">Full name</label><input id="name" autocomplete="name" placeholder="Godwin Ejeme"></div>
+            <div><label for="email">Email address</label><input id="email" type="email" autocomplete="email" placeholder="you@example.com" required></div>
+            <div><label for="phone">Phone number</label><input id="phone" autocomplete="tel" placeholder="08012345678"></div>
+            <div><label for="user">Customer ID</label><input id="user" placeholder="user_001" required></div>
+            <div><label for="location">Location</label><input id="location" placeholder="Port Harcourt, NG" required></div>
+            <div><label for="device">Device ID</label><input id="device" placeholder="device_web_01" required></div>
+            <div class="field full"><label for="amount">Order amount (NGN)</label><input id="amount" type="number" min="1" step="0.01" value="25000" required></div>
+          </div>
+          <div class="actions"><button class="btn primary" id="payBtn" type="submit">Review & continue to payment</button><button class="btn secondary" id="demoBtn" type="button">Load demo data</button></div>
+          <div class="notice">FraudGuard calculates the risk score server-side. The browser cannot submit or override the score.</div>
+        </form>
+        <div id="result" class="result"></div>
+      </div>
+    </section>
+    <aside class="card product">
+      <span class="product-badge">SECURE ORDER</span>
+      <h2>FraudGuard Demo Product</h2>
+      <p>A realistic checkout flow used to demonstrate the complete path from customer request to fraud decision and payment initialization.</p>
+      <div class="price" id="price">₦25,000</div>
+      <div class="protection">
+        <div class="protect"><i>✓</i><span>Transaction screened before payment initialization.</span></div>
+        <div class="protect"><i>✓</i><span>High-risk orders can be blocked automatically.</span></div>
+        <div class="protect"><i>✓</i><span>Medium-risk orders enter a manual review state.</span></div>
+        <div class="protect"><i>✓</i><span>Approved payments are handed off to Flutterwave.</span></div>
+      </div>
+    </aside>
+  </div>
+</main>
+<script>
+const form=document.getElementById('checkoutForm'),btn=document.getElementById('payBtn'),result=document.getElementById('result'),amount=document.getElementById('amount'),price=document.getElementById('price');
+function money(v){return new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',maximumFractionDigits:2}).format(Number(v)||0)}
+amount.addEventListener('input',()=>price.textContent=money(amount.value));
+document.getElementById('demoBtn').onclick=()=>{document.getElementById('name').value='Demo Customer';document.getElementById('email').value='demo@example.com';document.getElementById('phone').value='08000000000';document.getElementById('user').value='user_demo_001';document.getElementById('location').value='Port Harcourt, NG';document.getElementById('device').value='device_demo_01';document.getElementById('amount').value='25000';price.textContent=money(25000)};
+function showResult(type,title,html){result.className='result show '+type;result.innerHTML='<h3>'+title+'</h3>'+html;result.scrollIntoView({behavior:'smooth',block:'nearest'})}
+form.addEventListener('submit',async e=>{e.preventDefault();btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Screening transaction...';result.className='result';
+const payload={name:document.getElementById('name').value.trim(),email:document.getElementById('email').value.trim(),phone_number:document.getElementById('phone').value.trim(),user_id:document.getElementById('user').value.trim(),location:document.getElementById('location').value.trim(),device_id:document.getElementById('device').value.trim(),amount:Number(amount.value),currency:'NGN'};
+try{const r=await fetch('/ecommerce/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await r.json().catch(()=>({detail:'Unexpected server response'}));const risk=data.risk||{};const score=risk.risk_score??data.risk_score??'—';const reasons=risk.reasons||data.risk_reasons||[];const reasonText=reasons.length?'Signals: '+reasons.join(' · '):'No additional risk signals were returned.';if(r.status===200&&data.payment_link){showResult('allow','Transaction approved',`<div class="score">Risk score ${score}/100</div><p>${reasonText}</p><a href="${data.payment_link}" target="_blank" rel="noopener">Continue to Flutterwave payment →</a>`)}else if(r.status===202){showResult('review','Transaction sent for review',`<div class="score">Risk score ${score}/100</div><p>${reasonText}</p><p style="margin-top:9px">Payment is paused until an authorized reviewer approves the order.</p>`)}else if(r.status===403){showResult('reject','Transaction blocked',`<div class="score">Risk score ${score}/100</div><p>${reasonText}</p><p style="margin-top:9px">FraudGuard rejected this checkout before payment initialization.</p>`)}else{showResult('reject','Checkout unavailable',`<p>${data.detail||'The checkout service could not process this request.'}</p>`)}
+}catch(err){showResult('reject','Connection error','<p>The FraudGuard checkout service could not be reached. Make sure both services are running.</p>')}finally{btn.disabled=false;btn.textContent='Review & continue to payment'}});
+</script>
+</body>
+</html>
