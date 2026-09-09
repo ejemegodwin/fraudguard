@@ -33,6 +33,7 @@ Go E-commerce Service
    |       +--> hosted checkout
    |       +--> server-side verification
    |       +--> webhook
+   |       +--> authenticated reconciliation
    |
    +--> Admin review
            |
@@ -58,6 +59,8 @@ fraudguard/
 ├── tests/
 ├── go-service/
 │   ├── cmd/server/main.go
+│   ├── cmd/server/reconciliation.go
+│   ├── cmd/server/reconciliation_test.go
 │   ├── internal/fraudguard/client.go
 │   ├── internal/flutterwave/client.go
 │   ├── internal/payments/store.go
@@ -194,6 +197,20 @@ Added the first production-hardening layer:
 
 This hardening layer improves the MVP deployment boundary but does **not** make the system production-ready for real-money financial use by itself.
 
+## Step 28 — Payment reconciliation and CI verification ✅
+Added an authenticated manual reconciliation operation for payment recovery:
+
+- `POST /admin/orders/{order_id}/reconcile`
+- Requires `X-Admin-API-Key` / `ADMIN_API_KEY`.
+- Uses the persisted Flutterwave transaction ID rather than trusting browser or webhook claims.
+- Verifies transaction reference, currency, and charged amount against local state.
+- Safely transitions verified successful payments to `PAID`.
+- Safely transitions verified failed/cancelled payments to `FAILED`.
+- Leaves pending or mismatched provider states unchanged.
+- Returns whether local state changed and the provider status observed.
+- Added unit coverage for successful reconciliation, provider mismatch, and pending provider state.
+- Added Docker image build verification to GitHub Actions.
+
 # API Quick Reference
 
 | Service | Method | Endpoint | Purpose |
@@ -218,6 +235,7 @@ This hardening layer improves the MVP deployment boundary but does **not** make 
 | Go | `GET` | `/orders?status=...` | List orders by status |
 | Go | `POST` | `/admin/orders/{id}/approve` | Approve a reviewed order and initialize payment |
 | Go | `POST` | `/admin/orders/{id}/reject` | Reject a reviewed order |
+| Go | `POST` | `/admin/orders/{id}/reconcile` | Verify and safely reconcile provider payment state |
 | Go | `GET` | `/payment/callback` | Server-side payment verification |
 | Go | `POST` | `/webhooks/flutterwave` | Flutterwave webhook receiver |
 
@@ -292,6 +310,8 @@ If FraudGuard returns `REVIEW`, Go creates an order in `REVIEW` and returns HTTP
 
 If FraudGuard returns `REJECT`, Go creates an order in `REJECTED` and returns HTTP `403` without initializing payment.
 
+For an interrupted or uncertain payment, an authorized operator can call `/admin/orders/{order_id}/reconcile`. The service queries Flutterwave directly and changes local state only when the provider response matches the stored transaction reference, currency, and amount rules.
+
 # MVP Status
 
 The integrated MVP is **feature-complete for the planned development scope**:
@@ -304,6 +324,7 @@ The integrated MVP is **feature-complete for the planned development scope**:
 - pandas analytics
 - Isolation Forest anomaly analysis
 - Automated Python/Go tests and GitHub Actions CI
+- Docker build verification in CI
 - Browser dashboard
 - Go FraudGuard client
 - Go risk-gating service
@@ -316,6 +337,7 @@ The integrated MVP is **feature-complete for the planned development scope**:
 - Flutterwave payment initialization
 - Flutterwave server-side verification
 - Idempotent webhook boundary
+- Authenticated payment reconciliation
 - Docker deployment foundation
 - Service-to-service authentication boundary
 - Readiness/health checks
@@ -330,7 +352,7 @@ Before real-money production use:
 
 - Replace JSON order/payment persistence with PostgreSQL or another transactional database.
 - Store money as integer minor units such as kobo, not floating-point values.
-- Persist webhook event IDs and make webhook processing transactional and idempotent.
+- Keep webhook event IDs durable and make webhook processing transactional and idempotent.
 - Enforce order/payment transitions atomically in the database.
 - Add structured logging, metrics, tracing, rate limiting, retries, and circuit breakers.
 - Replace the single admin API key with an audited identity/role system.
@@ -339,13 +361,13 @@ Before real-money production use:
 - Add model/data drift monitoring.
 - Fulfill inventory only after verified payment and valid terminal order state.
 - Store secrets in a managed secret store.
-- Add audit logging for risk decisions, admin actions, and payment state changes.
+- Add audit logging for risk decisions, admin actions, reconciliation actions, and payment state changes.
 - Add database backups, migrations, disaster recovery, and multi-instance deployment strategy.
 - Add end-to-end integration tests using fake FraudGuard and Flutterwave servers.
 - Add security testing and an independent production review before handling real customer funds.
 
 # Development Philosophy
 
-FraudGuard starts with explainable rules and then adds statistical and machine-learning analysis. The Go service owns the fast e-commerce path, order lifecycle, review workflow, and payment boundary, while Python owns fraud intelligence and historical analysis.
+FraudGuard starts with explainable rules and then adds statistical and machine-learning analysis. The Go service owns the fast e-commerce path, order lifecycle, review workflow, payment boundary, and payment recovery, while Python owns fraud intelligence and historical analysis.
 
 The planned MVP scope is complete. Future work should focus on production infrastructure, database transactions, authentication/identity, observability, security review, and model/rule governance—not on extending the core proof-of-concept architecture.
