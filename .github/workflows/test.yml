@@ -40,5 +40,4 @@ jobs:
           go-version: "1.25"
 
       - name: Run Go tests
-        working-directory: go-service
-        run: go test ./...
+        run: cd go-service && go test ./...
